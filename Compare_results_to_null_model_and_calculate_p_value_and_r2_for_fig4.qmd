@@ -1,0 +1,259 @@
+---
+title: "Compare_results_to_a_null_model"
+format: html
+editor: visual
+---
+
+# Fabian (editor) had a comment that I should compare the results to a model that predicts based on the constraints of my model and a "random detection model"
+
+He suggests this because this would be interesting in order to see whether the model is able to detect anything at all.
+
+```{r}
+library(truncnorm)
+library(tidyverse)
+library(gt)
+
+source("S:\\Users\\maria\\functions\\SiteIndex.func_modifyed4.R")
+source("S:\\Users\\maria\\functions\\rmse_and_md_func.R")
+```
+
+Read in the predictions and the field reference values (from 2.2_SI_results).
+
+```{r}
+results_model = readRDS("S:\\Users\\maria\\PHD\\Paper_3\\output\\prediction_results.rds")
+```
+
+Add the results from a model that is saying that there are 14 whorls (average from the constraints of hyperparameters), a model were number of whorls within the range of constraints of the hyperparameters are sampled, and a model that guesses on the average field measured SI.
+
+```{r}
+set.seed(4525)  # for reproducibility
+results_model$random_whorls = round(rtruncnorm(nrow(results_model), a = 6, b = 22, mean = (6 + 22) / 2, sd = (22 - 6) / 6)) # sample from the range of possible number of whorls according to the hyperparameters.The SD is set to 2.67 so that three standard deviations covers almost the entire range. This ensures that the normal distribution is quite speread out within the range. 
+
+results_model = results_model %>% 
+  mutate(Null_model_constraints_average = calc_SI_MultiTemp(hts = c(2.5, 8), yrs = c(2024-14, 2024), SP = 1)[[1]]) %>% 
+  mutate(Null_model_average = mean(Field_measured_all_whorls)) %>% 
+  group_by(treeID) %>% 
+  mutate(Null_model_constraints = calc_SI_MultiTemp(hts = c(2.5, 8), yrs = c(2024-random_whorls, 2024), SP = 1)[[1]]) %>% 
+  ungroup()
+
+```
+
+## Calculate RMSE and MD
+
+```{r}
+# RMSE 
+results_model = results_model %>% 
+  group_by(plotID) %>% 
+  mutate(All_whorls = mean(All_whorls, na.rm = T), # I use na.rm = T because if there is NA for one tree, I still want to be able to use the other tree to calculate the SI for that plot. 
+         Null_model_constraints_avg = mean(Null_model_constraints_average, na.rm = T),
+         Null_model_constraints = mean(Null_model_constraints, na.rm = T),
+         Null_model_avg = mean(Null_model_average, na.rm = T),
+         First_six_whorls = mean(First_six_whorls, na.rm = T), 
+         Optimization = mean(Optimization, na.rm = T), 
+         Field_measured_all_whorls = mean(Field_measured_all_whorls, na.rm = T), 
+         Field_measured_first_six_whorls = mean(Field_measured_first_six_whorls, na.rm = T), 
+         Field_measured_optimization = mean(Field_measured_optimization, na.rm = T)) %>% 
+  ungroup() %>% 
+  select(c("plotID", "All_whorls", "Null_model_constraints_avg", "Null_model_constraints", "Null_model_avg", "First_six_whorls", "Optimization", "Field_measured_all_whorls", "Field_measured_first_six_whorls", "Field_measured_optimization")) %>% 
+  distinct() 
+
+# get the number of observations used to find the RMSE and MD
+nrow(results_model)
+```
+
+```{r}
+RMSE_MD_plot = results_model %>% 
+  mutate(RMSE_All_whorls = rmse_func(All_whorls, Field_measured_all_whorls), 
+         MD_All_whorls = md_func(All_whorls, Field_measured_all_whorls), 
+         
+         RMSE_Null_model_constraints_avg = rmse_func(Null_model_constraints_avg, Field_measured_all_whorls), 
+         MD_Null_model_constraints_avg = md_func(Null_model_constraints_avg, Field_measured_all_whorls), 
+         
+         RMSE_Null_model_constraints = rmse_func(Null_model_constraints, Field_measured_all_whorls), 
+         MD_Null_model_constraints = md_func(Null_model_constraints, Field_measured_all_whorls), 
+         
+         RMSE_Null_model_avg = rmse_func(Null_model_avg, Field_measured_all_whorls), 
+         MD_Null_model_avg = md_func(Null_model_avg, Field_measured_all_whorls), 
+         
+         RMSE_First_six_whorls = rmse_func(First_six_whorls, Field_measured_all_whorls), 
+         MD_First_six_whorls = md_func(First_six_whorls, Field_measured_all_whorls),
+         RMSE_First_six_whorls_same_int = rmse_func(First_six_whorls, Field_measured_first_six_whorls), 
+         MD_First_six_whorls_same_int = md_func(First_six_whorls, Field_measured_first_six_whorls),
+         
+         RMSE_Optimization = rmse_func(Optimization, Field_measured_all_whorls), 
+         MD_Optimization = md_func(Optimization, Field_measured_all_whorls), 
+         RMSE_Optimization_same_int = rmse_func(Optimization, Field_measured_optimization), 
+         MD_Optimization_same_int = md_func(Optimization, Field_measured_optimization)) %>% 
+  
+  mutate(RMSE_perc_All_whorls = (RMSE_All_whorls / mean(Field_measured_all_whorls))*100, 
+         MD_perc_All_whorls = (MD_All_whorls / mean(Field_measured_all_whorls))*100, 
+         
+         RMSE_perc_Null_model_constraints_avg = (RMSE_Null_model_constraints_avg / mean(Field_measured_all_whorls))*100, 
+         MD_perc_Null_model_constraints_avg = (MD_Null_model_constraints_avg / mean(Field_measured_all_whorls))*100, 
+         
+         RMSE_perc_Null_model_constraints = (RMSE_Null_model_constraints / mean(Field_measured_all_whorls))*100, 
+         MD_perc_Null_model_constraints = (MD_Null_model_constraints / mean(Field_measured_all_whorls))*100, 
+         
+         RMSE_perc_Null_model_avg = (RMSE_Null_model_avg / mean(Field_measured_all_whorls))*100, 
+         MD_perc_Null_model_avg = (MD_Null_model_avg / mean(Field_measured_all_whorls))*100, 
+         
+         
+         RMSE_perc_First_six_whorls = (RMSE_First_six_whorls / mean(Field_measured_all_whorls))*100, 
+         MD_perc_First_six_whorls = (MD_First_six_whorls / mean(Field_measured_all_whorls))*100,
+         RMSE_perc_First_six_whorls_same_int = (RMSE_First_six_whorls / mean(Field_measured_first_six_whorls))*100, 
+         MD_perc_First_six_whorls_same_int = (MD_First_six_whorls / mean(Field_measured_first_six_whorls))*100,
+         
+         RMSE_perc_Optimization = (RMSE_Optimization / mean(Field_measured_all_whorls))*100, 
+         MD_perc_Optimization = (MD_Optimization / mean(Field_measured_all_whorls))*100, 
+         RMSE_perc_Optimization_same_int = (RMSE_Optimization / mean(Field_measured_optimization))*100, 
+         MD_perc_Optimization_same_int = (MD_Optimization / mean(Field_measured_optimization))*100) %>% 
+  select(starts_with("RMSE"), starts_with("MD")) %>% 
+  distinct()
+
+# RMSE and MD in meters
+RMSE_MD_plot1 = RMSE_MD_plot %>% 
+  pivot_longer(
+  cols = c("RMSE_All_whorls", "RMSE_Null_model_constraints_avg", "RMSE_Null_model_constraints", "RMSE_Null_model_avg", "RMSE_First_six_whorls", "RMSE_First_six_whorls_same_int", "RMSE_Optimization", "RMSE_Optimization_same_int",
+           "MD_All_whorls", "MD_Null_model_constraints_avg", "MD_Null_model_constraints", "MD_Null_model_avg", "MD_First_six_whorls", "MD_First_six_whorls_same_int", "MD_Optimization", "MD_Optimization_same_int"), 
+  names_to = c("Metric", "Type"), # Create new columns from the names
+  names_pattern = "(RMSE|MD)_(.*)") %>% 
+  select(-c(starts_with("RMSE"), starts_with("MD"))) %>% 
+  pivot_wider(names_from = "Metric", values_from = "value")
+
+# RMSE and MD in percentage
+RMSE_MD_plot2 = RMSE_MD_plot %>% 
+  pivot_longer(
+  cols = c("RMSE_perc_All_whorls", "RMSE_perc_Null_model_constraints_avg", "RMSE_perc_Null_model_constraints", "RMSE_perc_Null_model_avg", "RMSE_perc_First_six_whorls", "RMSE_perc_First_six_whorls_same_int", "RMSE_perc_Optimization", "RMSE_perc_Optimization_same_int",
+           "MD_perc_All_whorls", "MD_perc_Null_model_constraints_avg", "MD_perc_Null_model_constraints", "MD_perc_Null_model_avg", "MD_perc_First_six_whorls", "MD_perc_First_six_whorls_same_int", "MD_perc_Optimization", "MD_perc_Optimization_same_int"), 
+  names_to = c("Metric", "Type"), # Create new columns from the names
+  names_pattern = "(RMSE|MD)_(.*)") %>% 
+  select(-c(starts_with("RMSE"), starts_with("MD"))) %>% 
+  pivot_wider(names_from = "Metric", values_from = "value") %>% 
+  mutate(Type = str_replace(Type, "perc_", "")) %>% 
+  rename(RMSE_perc = RMSE, 
+         MD_perc = MD)
+
+# Combine the two dataframes
+RMSE_MD_plot = full_join(RMSE_MD_plot1, RMSE_MD_plot2, by = "Type")
+
+RMSE_MD_plot
+
+RMSE_MD_plot = RMSE_MD_plot %>% 
+  filter(!grepl("six_whorls$", Type)) %>% # Only keep those that have used the same intercept
+  filter(!grepl("Optimization$", Type))
+```
+
+```{r}
+RMSE_MD_plot_nice = RMSE_MD_plot %>% 
+  mutate(Type = case_when(
+    Type == "All_whorls" ~ "All whorls", 
+    Type == "Null_model_constraints_avg" ~ "Hyperparameters average number of whorls",
+    Type == "Null_model_constraints" ~ "Hyperparameters number of whorls",
+    Type == "Null_model_avg" ~ "Guessing on the average SI",
+    Type == "First_six_whorls_same_int" ~ "First six whorls", 
+    Type == "Optimization_same_int" ~ "Selected whorls"
+  ), 
+  RMSE = round(RMSE, 1), 
+  MD = round(MD, 1), 
+  RMSE_perc = round(RMSE_perc, 1), 
+  MD_perc = round(MD_perc, 1)) %>% 
+  filter(Type != "Guessing on the average SI") %>% # NOTE: Taking this away because it is not what Fabian is asking for
+  rename(Intercept = Type, 
+         "RMSE (m)" = RMSE, 
+         "MD (m)" = MD, 
+         "RMSE (%)" = RMSE_perc, 
+         "MD (%)" = MD_perc) %>% 
+  relocate(c("Intercept", "RMSE (m)", "RMSE (%)", "MD (m)", "MD (%)"))
+```
+
+```{r}
+
+RMSE_MD_gt = gt(RMSE_MD_plot_nice) 
+
+RMSE_MD_gt
+```
+
+# Plot of SI errors on plot level
+
+```{r}
+
+dat_SIres_plot = results_model %>% 
+  pivot_longer(cols = c(All_whorls, Null_model_constraints_avg, Null_model_constraints, Null_model_avg, First_six_whorls, Optimization), values_to = "SI_pred", names_to = "Type") %>% 
+  pivot_longer(cols = c(Field_measured_all_whorls, Field_measured_first_six_whorls, Field_measured_optimization), values_to = "SI_ref", names_to = "Type2") %>% 
+  filter(!(Type == "All_whorls" & Type2 == "Field_measured_first_six_whorls")) %>%
+  filter(!(Type == "All_whorls" & Type2 == "Field_measured_optimization")) %>% 
+  filter(!(Type == "Null_model_constraints_avg" & Type2 == "Field_measured_first_six_whorls")) %>%
+  filter(!(Type == "Null_model_constraints_avg" & Type2 == "Field_measured_optimization")) %>% 
+  filter(!(Type == "Null_model_constraints" & Type2 == "Field_measured_first_six_whorls")) %>%
+  filter(!(Type == "Null_model_constraints" & Type2 == "Field_measured_optimization")) %>% 
+  filter(!(Type == "Null_model_avg" & Type2 == "Field_measured_first_six_whorls")) %>%
+  filter(!(Type == "Null_model_avg" & Type2 == "Field_measured_optimization")) %>% 
+  filter(!(Type == "First_six_whorls" & Type2 == "Field_measured_optimization")) %>% 
+  filter(!(Type == "Optimization" & Type2 == "Field_measured_first_six_whorls")) %>% 
+  filter(!(Type == "First_six_whorls" & Type2 == "Field_measured_all_whorls")) %>% 
+  filter(!(Type == "Optimization" & Type2 == "Field_measured_all_whorls")) %>% 
+  select(-c("Type2")) %>% 
+  mutate(Type = case_when(
+    Type == "All_whorls" ~ "All whorls", 
+    Type == "Null_model_constraints_avg" ~ "Whorls from hyperparameters (mean)",
+    Type == "Null_model_constraints" ~ "Whorls from hyperparameters",
+    Type == "Null_model_avg" ~ "Guessing on the average SI",
+    Type == "First_six_whorls" ~ "Lowest whorls",
+    Type == "Optimization" ~ "Selected whorls"
+  ), 
+  difference = SI_pred - SI_ref) %>% 
+  filter(!(Type %in% c("Guessing on the average SI"))) # NOTE took this away because it is not what Fabian is asking for. 
+
+
+# scatterplot
+
+dat_SIres_plot %>% 
+  ggplot() +
+  geom_point(aes(x = SI_ref, y = SI_pred, col = Type), alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, col = "grey", linetype = "dashed", linewidth = 1) +  # Add perfect prediction line
+  scale_color_manual(values = c("All whorls" = "black", "Whorls from hyperparameters" = "magenta", "Whorls from hyperparameters (mean)" = "purple", "Lowest whorls" = "#0072B2", "Selected whorls" = "#D55E00")) +
+  # scale_fill_manual(values = color_palette) +
+  theme_bw() +
+  ylab("Predicted SI (m)") +
+  xlab("Reference SI (m)") +
+  ylim(14, 33) +
+  xlim(14, 33) +
+  theme(
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12), # Customize y-axis text
+    legend.title = element_blank(), # Customize legend title
+    legend.text = element_text(size = 14), # Customize legend text
+    strip.text = element_text(size = 14)
+  ) -> sctrplt1
+
+ggsave(plot = sctrplt1, paste0("S:\\Users\\maria\\PHD\\Paper_3\\fig\\reviewed_figures\\only_for_response\\hyperparameters_analysis_scatterplot.tif"), device = "tiff", width = 10, height = 6, units = "in", dpi = 500)
+```
+
+## Calculate p-value and R2 for figure 4
+
+```{r}
+p_value_and_cor_dat = dat_SIres_plot %>% 
+  ungroup() %>% 
+  filter(Type %in% c("All whorls", "Lowest whorls", "Selected whorls")) %>% 
+  group_by(Type) %>% 
+  mutate(difference = SI_pred - SI_ref) %>% 
+  mutate(correlation = cor(SI_pred, SI_ref), 
+         p_value = t.test(SI_pred, SI_ref, paired = T, alternative = "two.sided")[["p.value"]]) 
+
+hist(p_value_and_cor_dat$difference) # Looks normally distributed, which is a requirement for the t-test. 
+
+test = t.test(dat_SIres_plot$SI_pred, dat_SIres_plot$SI_ref, paired = T, alternative = "two.sided")
+test1 = t.test(dat_SIres_plot$SI_pred, dat_SIres_plot$SI_ref, alternative = "two.sided")
+
+summary(test)
+  
+p_value_and_cor_dat %>% 
+  select(c("Type", "correlation", "p_value")) %>% 
+  distinct()
+
+?t.test
+
+test[["p.value"]]
+```

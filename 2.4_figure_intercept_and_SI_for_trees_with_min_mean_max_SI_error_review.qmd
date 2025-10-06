@@ -1,0 +1,557 @@
+---
+title: "Plots"
+format: html
+editor: visual
+---
+
+# Figure 4: SI determination from predicted branch whorls for the worst, the best, and a representative tree
+
+```{r}
+library(tidyverse)
+library(lidR)
+library(skogR)
+library(cowplot)
+library(data.table)
+
+source("S:\\Users\\maria\\functions\\SiteIndex.func_modifyed4.R")
+```
+
+I want to make this plot both for the worst, the most representative, and the best tree to show the span in the predictions and the effect this has on the determined SI.
+
+Okey, what I need to make this plot is...
+
+The MLS point cloud from that tree.
+
+The positions of predicted and fieldmeasured branch whorls..
+
+For optimization: the start and end of the intercept for this tree and the number of whorls. For all whorls and first six whorls this is already decided by the rule applied.
+
+## Decide which tree to plot
+
+First, I need to find out which tree should be considered a representative tree. I have decided that the tree with the minimum, mean, and maximum error in SI as calculated using all whorls should be selected. I will need to select one of the intercepts to calculate the minimum, mean, and maximum from and I think all_whorls is more likely to reflect the long-term growth so I go with that one.
+
+```{r}
+
+SI_values = readRDS("S:\\Users\\maria\\PHD\\Paper_3\\output\\prediction_results.rds") %>% 
+  mutate(SI_difference = abs(All_whorls - Field_measured_all_whorls))
+
+```
+
+```{r}
+
+# Calculate the worst, the average, and the best of the SI prediction 
+values_from_tree = c( max(SI_values$SI_difference, na.rm = T), mean(SI_values$SI_difference, na.rm = T), min(SI_values$SI_difference, na.rm = T) )
+
+# Find the absolute differences between each value and the min, mean, and max
+SI_values$abs_diff_min = abs(SI_values$SI_difference - values_from_tree[1])
+SI_values$abs_diff_mean = abs(SI_values$SI_difference - values_from_tree[2])
+SI_values$abs_diff_max = abs(SI_values$SI_difference - values_from_tree[3])
+
+# Find the row with the minimum absolute difference
+closest_value_row_min = SI_values[which.min(SI_values$abs_diff_min), ]
+closest_value_row_mean = SI_values[which.min(SI_values$abs_diff_mean), ]
+closest_value_row_max = SI_values[which.min(SI_values$abs_diff_max), ]
+
+# Extract the ID of the observation with the value closest to the min, mean, and max. 
+closest_id_min = closest_value_row_min$treeID # this tree should be selected. 
+closest_id_mean = closest_value_row_mean$treeID # this tree should be selected. 
+closest_id_max = closest_value_row_max$treeID # this tree should be selected. 
+
+closest_ids = c(closest_id_min, closest_id_mean, closest_id_max) # put them together to a vector which one can loop over
+
+# here I will allow for other treeIDs to evaluate single trees.. 
+# closest_ids = c()
+
+closest_ids_chr = as.character(closest_ids)
+```
+
+## Get the relevant data to make the plot for this tree
+
+### Get MLS point cloud
+
+```{r}
+
+ptcl_aut = list.files("C:\\Users\\mamoan\\OneDrive - Norwegian University of Life Sciences\\PHD\\Paper_3_young_stands\\data\\test")
+ptcl_aut_nolas = str_replace(ptcl_aut, ".las|.laz", "")
+
+which(ptcl_aut_nolas %in% closest_ids_chr)
+
+ptcl_aut = ptcl_aut[which(ptcl_aut_nolas %in% closest_ids_chr)] # This is the las files to read in.
+
+las = list()
+df_las_list = list()
+
+for (i in 1:length(ptcl_aut)) {
+las[[i]] = readLAS(paste0("C:\\Users\\mamoan\\OneDrive - Norwegian University of Life Sciences\\PHD\\Paper_3_young_stands\\data\\test\\", ptcl_aut[i]))
+
+# Normalize the X and Y around 0,0  
+las[[i]]@data[, X := X - mean(X)]
+las[[i]]@data[, Y := Y - mean(Y)]
+  
+# Filter points within the defined rectangle in the X-Y plane
+filtered_las <- lidR::filter_poi(las[[i]], X >= -0.5 & X <= 0.5)
+  
+# Convert filtered LAS data to a dataframe for plotting
+df_las = data.frame(Y = filtered_las@data$Y,
+                Z = filtered_las@data$Z) %>%
+    slice_sample(n = 10000) # Can't plot all the plots. It's too much for the ggplot() function.
+
+df_las_list[[i]] = df_las
+
+}
+```
+
+### Get the start and end of the intercept for the optimization
+
+I will just run the code from 3.2 again.
+
+```{r}
+p_dat = read.csv("S:\\Users\\maria\\PHD\\Paper_3\\data\\results_prediction\\all_test_trees_treeID_whorls_pc_HKL2model_24cmthresh.csv") %>% 
+  # filter(!(treeID %in% manually_segmented_val)) %>% # I choose to include the manually segmented trees 
+  group_by(treeID) %>% 
+  filter(z > 2.5 & z <= 8.00) %>% 
+  mutate(Kvistkrans = row_number()) %>% 
+  filter(max(Kvistkrans) >= 6) %>%  
+  ungroup() %>% 
+  rename(prob = confidence_p2) %>% 
+  as.data.table()
+
+
+f_dat = readRDS("S:\\Users\\maria\\PHD\\Paper_3\\data\\fielddata\\fielddata.rds") %>% 
+  select(-c("Trenr", "Avstand", "Retning", "Comment_1", "Comment_2")) %>% 
+  mutate(treeID = str_replace(plot_and_tree, "_", "")) %>% 
+  mutate(treeID = as.numeric(treeID)) %>% 
+  group_by(treeID) %>% 
+  filter(Lengde_m > 2.5 & Lengde_m <= 8) %>% 
+  mutate(Kvistkrans = row_number()) %>% # Renumber the Kvistkrans after selecting only Kvistkranses over 2.5 meters 
+  ungroup() %>% 
+  as.data.table()  
+
+p_dat_opt = p_dat # make a copy of the predicted data that you can use for the optimization 
+f_dat_opt = f_dat
+```
+
+```{r}
+
+# Loop over all possible starting points for the sequence
+
+best_seq = function(data = p_dat1, min_sequence_length = min_sequence_length) {
+  
+      # Initialize variables
+      max_avg <- 0
+      best_sequence <- NULL
+  
+      for (start in 1:(nrow(data) - min_sequence_length + 1)) {
+      # Loop over all possible ending points for the sequence
+        for (end in (start + min_sequence_length - 1):nrow(data)) {
+        # Calculate avg of confidence scores for the current sequence
+        current_avg <- mean(data$prob[start:end])
+    
+    # print(paste(current_avg, start, end, end-start+1)) # just checking that it is     working. 
+    
+        # If the current avg is greater than the maximum avg found so far, update the maximum avg and best sequence
+        if (current_avg > max_avg) {
+        max_avg <- current_avg
+        best_sequence <- data$branch_whorl[start:end]
+          }
+        }
+      }
+  
+  return(list(best_sequence, max_avg))
+  
+}
+
+```
+
+```{r}
+
+i = 3
+
+intercept_start_list = list()
+intercept_end_list = list()
+num_whorls_list = list()
+
+f_intercept_start_list = list()
+f_intercept_end_list = list()
+f_num_whorls_list = list()
+
+
+p_dat_opt$SI_pred = as.numeric(NA)
+f_dat_opt$SI_ref = as.numeric(NA)
+
+for(i in 1:length(closest_ids)) {
+
+  p_dat1 = p_dat_opt[treeID == closest_ids[i]]
+  f_dat1 = f_dat_opt[treeID == closest_ids[i]]
+  
+  p_dat1 = p_dat1 %>% 
+  arrange(z) %>% 
+  mutate(branch_whorl = 1:n())
+  
+  min_sequence_length = 3 # the minimum sequence length is 3
+  min_sequence_length_full = 6
+
+    if(max(p_dat1$branch_whorl) >= min_sequence_length_full) { # need to have at least these many branch whorls 
+
+      # Find best sequence given the minimum sequence length
+     
+      best_sequence = best_seq(data = p_dat1, min_sequence_length = min_sequence_length)[[1]]
+      max_avg = best_seq(data = p_dat1, min_sequence_length = min_sequence_length)[[2]]
+      
+      best_sequence_full = best_seq(data = p_dat1, min_sequence_length = min_sequence_length_full)[[1]]
+      max_avg_full = best_seq(data = p_dat1, min_sequence_length = min_sequence_length_full)[[2]]
+      
+      if (length(best_sequence) < 6 & max(p_dat1$branch_whorl) >= (length(best_sequence) + min_sequence_length)) {
+        
+        p_dat2 = p_dat1 %>% 
+          slice(-best_sequence) %>% # take out the branch whorls which you have just "used up"
+          arrange(z)
+  
+          if(nrow(p_dat2) > 0) {
+            p_dat2 = p_dat2 %>% 
+            mutate(branch_whorl = 1:n())
+          }
+        
+        best_sequence = list(best_sequence, best_seq(data = p_dat2, min_sequence_length = min_sequence_length)[[1]])
+        max_avg = c(max_avg, best_seq(data = p_dat2, min_sequence_length = min_sequence_length)[[2]])
+        
+      }
+      
+      if(length(best_sequence) > 1 & length(max_avg) > 1) {
+        
+        if (mean(max_avg) > mean(max_avg_full)) {
+          
+          intercept_start_list[[i]] = c(p_dat1$z[unlist(best_sequence[[1]])[1]], p_dat2$z[unlist(best_sequence[[2]])[1]])
+            
+          intercept_end_list[[i]] = c(p_dat1$z[unlist(best_sequence[[1]])[length(best_sequence[[1]])]], p_dat2$z[unlist(best_sequence[[2]])[length(best_sequence[[2]])]])
+            
+          num_whorls_list[[i]] = c(length(best_sequence[[1]]), length(best_sequence[[2]]))  
+          
+        } else {
+          
+          intercept_start_list[[i]] = p_dat1$z[best_sequence_full[1]]
+            
+          intercept_end_list[[i]] = p_dat1$z[best_sequence_full[length(best_sequence_full)]]
+            
+          num_whorls_list[[i]] = length(best_sequence_full)  
+          
+          
+        }
+        
+      } else {
+        
+        intercept_start_list[[i]] = p_dat1$z[best_sequence_full[1]]
+            
+        intercept_end_list[[i]] = p_dat1$z[best_sequence_full[length(best_sequence_full)]]
+            
+        num_whorls_list[[i]] = length(best_sequence_full)   
+        
+      }
+      
+      
+      if(length(intercept_start_list[[i]]) > 1 & length(intercept_end_list[[i]]) > 1 & length(num_whorls_list[[i]]) > 1) {
+        
+        # Get the field measured intercept start and end. 
+      f_intercept_start_list[[i]] = rep(NA, 2)
+        
+      f_intercept_start_list[[i]][1] = f_dat1$Lengde_m[which.min(abs(f_dat1$Lengde_m - intercept_start_list[[i]][1]))]
+      f_intercept_start_list[[i]][2] = f_dat1$Lengde_m[which.min(abs(f_dat1$Lengde_m - intercept_start_list[[i]][2]))]
+      
+      f_intercept_end_list[[i]] = rep(NA, 2)
+      
+      f_intercept_end_list[[i]][1] = f_dat1$Lengde_m[which.min(abs(f_dat1$Lengde_m - intercept_end_list[[i]][1]))]
+      f_intercept_end_list[[i]][2] = f_dat1$Lengde_m[which.min(abs(f_dat1$Lengde_m - intercept_end_list[[i]][2]))]
+        
+        
+      } else if (length(intercept_start_list[[i]]) == 1 & length(intercept_end_list[[i]]) == 1 & length(num_whorls_list[[i]]) == 1) {
+        
+      f_intercept_start_list[[i]] = f_dat1$Lengde_m[which.min(abs(f_dat1$Lengde_m - intercept_start_list[[i]]))]
+        
+      f_intercept_end_list[[i]] = f_dat1$Lengde_m[which.min(abs(f_dat1$Lengde_m - intercept_end_list[[i]]))]
+        
+      }
+      
+    }
+  
+}
+
+```
+
+Make a data.frame of the intercept starts and ends
+
+```{r}
+
+closest_ids
+
+p_dat_trees = list()
+field_dat_trees = list()
+p_f_tree = list()
+
+i = 2
+
+for(i in 1:length(closest_ids)) {
+
+p_dat_trees[[i]] = p_dat %>% 
+  filter(treeID == closest_ids[i]) %>% 
+  select(c("treeID", "z")) %>% 
+  mutate(Predicted_or_fieldmeasured = "Predicted")
+
+field_dat_trees[[i]] = readRDS("S:\\Users\\maria\\PHD\\Paper_3\\data\\fielddata\\fielddata.rds") %>% 
+  select(-c("Trenr", "Avstand", "Retning", "Comment_1", "Comment_2")) %>% 
+  mutate(treeID = str_replace(plot_and_tree, "_", "")) %>% 
+  mutate(treeID = as.numeric(treeID)) %>% 
+  group_by(treeID) %>% 
+  filter(Lengde_m > 2.5 & Lengde_m <= 8) %>% 
+  mutate(Kvistkrans = row_number()) %>% # Renumber the Kvistkrans after selecting only Kvistkranses over 2.5 meters 
+  ungroup() %>% 
+  as.data.table() %>% 
+  filter(treeID == closest_ids[i]) %>% 
+  rename(z = Lengde_m) %>% 
+  select(c("treeID", "z")) %>% 
+  mutate(Predicted_or_fieldmeasured = "Field measured")
+
+p_f_tree[[i]] = bind_rows(p_dat_trees[[i]], field_dat_trees[[i]]) %>% 
+  mutate(Predicted_or_fieldmeasured = as.factor(Predicted_or_fieldmeasured))
+
+}
+
+p_f_tree = as.data.table(bind_rows(p_f_tree))
+```
+
+```{r}
+
+intercept_df = as_tibble(data.frame(treeID = c(rep(closest_ids[1], 6), rep(closest_ids[2], 6), rep(closest_ids[3], 8)),  
+                          Type = c("All_whorls", "First_six_whorls", "Optimization", "Field_measured_all_whorls", "Field_measured_first_six_whorls", "Field_measured_optimization", 
+                                   "All_whorls", "First_six_whorls", "Optimization", "Field_measured_all_whorls", "Field_measured_first_six_whorls", "Field_measured_optimization", 
+                                   "All_whorls", "First_six_whorls", "Optimization", "Optimization", "Field_measured_all_whorls", "Field_measured_first_six_whorls", "Field_measured_optimization","Field_measured_optimization"), 
+                          Intercept_start = c(2.5, 2.5, intercept_start_list[[1]], 2.5, 2.5, f_intercept_start_list[[1]], 
+                                              2.5, 2.5, intercept_start_list[[2]], 2.5, 2.5, f_intercept_start_list[[2]], 
+                                              2.5, 2.5, intercept_start_list[[3]], 2.5, 2.5, f_intercept_start_list[[3]]), 
+                          Intercept_end = c(max(p_dat_trees[[1]]$z), sort(p_dat_trees[[1]]$z)[6], intercept_end_list[[1]], max(field_dat_trees[[1]]$z), (field_dat_trees[[1]]$z)[6], f_intercept_end_list[[1]], 
+                                            max(p_dat_trees[[2]]$z), sort(p_dat_trees[[2]]$z)[6], intercept_end_list[[2]], max(field_dat_trees[[2]]$z), (field_dat_trees[[2]]$z)[6], f_intercept_end_list[[2]], 
+                                            max(p_dat_trees[[3]]$z), sort(p_dat_trees[[3]]$z)[6], intercept_end_list[[3]], max(field_dat_trees[[3]]$z), (field_dat_trees[[3]]$z)[6], f_intercept_end_list[[3]])))
+
+intercept_df = intercept_df %>% 
+  mutate(Predicted_or_fieldmeasured = case_when(
+    Type %in% c("All_whorls", "First_six_whorls", "Optimization") ~ "Predicted",
+    Type %in% c("Field_measured_all_whorls", "Field_measured_optimization", "Field_measured_first_six_whorls") ~ "Field measured"
+  ))
+```
+
+### Get the SI values
+
+```{r}
+
+SI_values = readRDS("S:\\Users\\maria\\PHD\\Paper_3\\output\\prediction_results.rds") %>% 
+  select(-c("plotID")) %>% 
+  filter(treeID %in% closest_ids) %>% 
+  pivot_longer(c("All_whorls", "First_six_whorls", "Field_measured_all_whorls", "Field_measured_optimization", "Field_measured_first_six_whorls", "Optimization"), names_to = "Type", values_to = "SI_value") %>% 
+  mutate(Predicted_or_fieldmeasured = case_when(
+    Type %in% c("All_whorls", "First_six_whorls", "Optimization") ~ "Predicted",
+    Type %in% c("Field_measured_all_whorls", "Field_measured_optimization", "Field_measured_first_six_whorls") ~ "Field measured"
+  )) 
+```
+
+### Put it together
+
+```{r}
+
+SI_together = full_join(intercept_df, SI_values, by = c("Type", "treeID", "Predicted_or_fieldmeasured")) %>% 
+  mutate(Type = str_replace(Type, "Field_measured_", "")) %>% 
+  mutate(Type = str_to_title(Type)) %>% 
+  mutate(Type = case_when(
+    Type == "All_whorls" ~ "All whorls", 
+    Type == "First_six_whorls" ~ "Lowest whorls", 
+    Type == "Field_measured" ~ "Field measured", 
+    Type == "Optimization" ~ "Selected whorls" # I want to call it selected whorls
+  ))
+```
+
+## SI curves from the different SI values
+
+```{r}
+
+SI_curve = SI_together %>%
+  select(-c("Intercept_start", "Intercept_end")) %>% 
+  distinct() %>% 
+  mutate(`Top height (m)` = map(SI_value, ~heightStandDominant(.x, seq(1,40), 1))) %>% # add heights
+  unnest(`Top height (m)`) %>% 
+  group_by(Type, treeID, Predicted_or_fieldmeasured) %>% 
+  mutate(`Age (years)` = 1:40) %>% 
+  ungroup() %>% 
+  data.table()
+
+```
+
+## Plot
+
+```{r}
+
+# Determining where to put the segments showing the intercept
+SI_together = SI_together %>% 
+  mutate(x_adj = case_when(
+    Type == "All whorls" & Predicted_or_fieldmeasured == "Predicted" ~ -2,
+    Type == "All whorls" & Predicted_or_fieldmeasured == "Field measured" ~ -1.9,
+    Type == "Lowest whorls" & Predicted_or_fieldmeasured == "Predicted" ~ -1.5,
+    Type == "Lowest whorls" & Predicted_or_fieldmeasured == "Field measured" ~ -1.4,
+    Type == "Selected whorls" & Predicted_or_fieldmeasured == "Predicted" ~ 1.4, 
+    Type == "Selected whorls" & Predicted_or_fieldmeasured == "Field measured" ~ 1.5)) %>% 
+  as.data.table()
+
+```
+
+```{r}
+
+# The minimum 
+
+ggplot() +
+    geom_point(data = p_f_tree[treeID == closest_ids[1]], aes(0, y = z, col = Predicted_or_fieldmeasured), shape = 17) +
+    geom_segment(data = SI_together[treeID == closest_ids[1]], aes(x = x_adj, xend = x_adj, y = `Intercept_start`, yend = `Intercept_end`, linetype = Type, color = Predicted_or_fieldmeasured), linewidth = 1) + 
+    geom_point(data = df_las_list[[1]], mapping = aes(x = Y, y = Z), size = 0.3, alpha = 0.3, col = "grey", alpha = 0.3) + 
+    xlab("") +
+    ylab("Height (m)") +
+    scale_y_continuous(breaks = 1:8) +
+    scale_color_manual(values = c("Field measured" = "#0072B2", "Predicted" = "#D55E00")) +
+    scale_linetype_manual(values = c("All whorls" = "solid", "Lowest whorls" = "dotdash", "Selected whorls" = "dotted")) +
+    xlim(c(-3, 3)) +
+    theme_bw() +
+    theme(legend.position = "none", axis.text.x = element_blank(), axis.ticks.x = element_blank(), axis.title = element_text(size = 14), axis.text = element_text(size = 12)) -> plot_branchwhorls_intercept_1 
+
+plot_branchwhorls_intercept_1
+
+# The mean 
+
+ggplot() +
+    geom_point(data = p_f_tree[treeID == closest_ids[2]], aes(0, y = z, col = Predicted_or_fieldmeasured), shape = 17) +
+    geom_segment(data = SI_together[treeID == closest_ids[2]], aes(x = x_adj, xend = x_adj, y = `Intercept_start`, yend = `Intercept_end`, linetype = Type, color = Predicted_or_fieldmeasured), linewidth = 1) + 
+    geom_point(data = df_las_list[[2]], mapping = aes(x = Y, y = Z), size = 0.3, alpha = 0.3, col = "grey", alpha = 0.3) + 
+    xlab("") +
+    ylab("Height (m)") +
+    scale_y_continuous(breaks = 1:8) +
+    scale_color_manual(values = c("Field measured" = "#0072B2", "Predicted" = "#D55E00")) +
+    scale_linetype_manual(values = c("All whorls" = "solid", "Lowest whorls" = "dotdash", "Selected whorls" = "dotted")) +
+    xlim(c(-3, 3)) +
+    theme_bw() +
+    theme(legend.position = "none", axis.text.x = element_blank(), axis.ticks.x = element_blank(), axis.title = element_text(size = 14), axis.text = element_text(size = 12)) -> plot_branchwhorls_intercept_2 
+
+plot_branchwhorls_intercept_2
+
+
+# The maximum 
+
+ggplot() +
+    geom_point(data = p_f_tree[treeID == closest_ids[3]], aes(0, y = z, col = Predicted_or_fieldmeasured), shape = 17) +
+    geom_segment(data = SI_together[treeID == closest_ids[3]], aes(x = x_adj, xend = x_adj, y = `Intercept_start`, yend = `Intercept_end`, linetype = Type, color = Predicted_or_fieldmeasured), linewidth = 1) + 
+    geom_point(data = df_las_list[[3]], mapping = aes(x = Y, y = Z), size = 0.3, alpha = 0.3, col = "grey", alpha = 0.3) + 
+    xlab("") +
+    ylab("Height (m)") +
+    scale_y_continuous(breaks = 1:8) +
+    scale_color_manual(values = c("Field measured" = "#0072B2", "Predicted" = "#D55E00")) +
+    scale_linetype_manual(values = c("All whorls" = "solid", "Lowest whorls" = "dotdash", "Selected whorls" = "dotted")) +
+    xlim(c(-3, 3)) +
+    theme_bw() +
+    theme(legend.position = "none", axis.text.x = element_blank(), axis.ticks.x = element_blank(), axis.title = element_text(size = 14), axis.text = element_text(size = 12)) -> plot_branchwhorls_intercept_3 
+
+plot_branchwhorls_intercept_3
+```
+
+The SI curve
+
+```{r}
+
+# the minimum 
+
+ggplot(SI_curve[treeID == closest_ids[1]]) +
+  geom_line(aes(x = `Age (years)`, y = `Top height (m)`, linetype = Type, color = Predicted_or_fieldmeasured), linewidth = 1) +
+  scale_color_manual(values = c("Field measured" = "#0072B2", "Predicted" = "#D55E00")) +
+  scale_linetype_manual(values = c("All whorls" = "solid", "Lowest whorls" = "dotdash", "Selected whorls" = "dotted")) +
+  labs(color = NULL, linetype = NULL) +  # Remove legend title
+  theme_bw() +
+  theme(legend.text = element_text(size = 13), axis.title = element_text(size = 14), axis.text = element_text(size = 12)) -> plot_SI_curve_1 
+
+plot_SI_curve_1
+
+
+# The mean 
+
+ggplot(SI_curve[treeID == closest_ids[2]]) +
+  geom_line(aes(x = `Age (years)`, y = `Top height (m)`, linetype = Type, color = Predicted_or_fieldmeasured), linewidth = 1) +
+  scale_color_manual(values = c("Field measured" = "#0072B2", "Predicted" = "#D55E00")) +
+  scale_linetype_manual(values = c("All whorls" = "solid", "Lowest whorls" = "dotdash", "Selected whorls" = "dotted")) +
+  labs(color = NULL, linetype = NULL) +  # Remove legend title
+  theme_bw() +
+  theme(legend.text = element_text(size = 13), axis.title = element_text(size = 14), axis.text = element_text(size = 12)) -> plot_SI_curve_2 
+
+plot_SI_curve_2
+
+
+# The maximum 
+
+ggplot(SI_curve[treeID == closest_ids[3]]) +
+  geom_line(aes(x = `Age (years)`, y = `Top height (m)`, linetype = Type, color = Predicted_or_fieldmeasured), linewidth = 1) +
+  scale_color_manual(values = c("Field measured" = "#0072B2", "Predicted" = "#D55E00")) +
+  scale_linetype_manual(values = c("All whorls" = "solid", "Lowest whorls" = "dotdash", "Selected whorls" = "dotted")) +
+  labs(color = NULL, linetype = NULL) +  # Remove legend title
+  theme_bw() +
+  theme(legend.text = element_text(size = 13), axis.title = element_text(size = 14), axis.text = element_text(size = 12)) -> plot_SI_curve_3 
+
+plot_SI_curve_3
+```
+
+Plot together
+
+```{r}
+
+##### Tree with the smallest SI error #####
+
+plot_intercepts_SI_1 = plot_grid(plot_branchwhorls_intercept_1, plot_SI_curve_1, rel_widths = c(1, 1.3))
+
+# Add a title above the combined plot
+title = ggdraw() + 
+  theme(plot.background = element_rect(fill = "white", color = NA)) +  # set white background
+  draw_label("The tree with the largest SI prediction error", fontface = 'bold', x = 0.5, hjust = 0.5)
+
+# Combine title and plots vertically
+plot_intercepts_SI_1 = plot_grid(title, plot_intercepts_SI_1, ncol = 1, rel_heights = c(0.1, 1))
+
+plot_intercepts_SI_1
+
+
+##### Tree with the average SI error #####
+
+plot_intercepts_SI_2 = plot_grid(plot_branchwhorls_intercept_2, plot_SI_curve_2, rel_widths = c(1, 1.3))
+
+# Add a title above the combined plot
+title = ggdraw() + 
+  theme(plot.background = element_rect(fill = "white", color = NA)) +  # set white background
+  draw_label("The tree with the average SI prediction error", fontface = 'bold', x = 0.5, hjust = 0.5)
+
+# Combine title and plots vertically
+plot_intercepts_SI_2 = plot_grid(title, plot_intercepts_SI_2, ncol = 1, rel_heights = c(0.1, 1))
+
+plot_intercepts_SI_2
+
+
+##### Tree with the largest SI error #####
+
+plot_intercepts_SI_3 = plot_grid(plot_branchwhorls_intercept_3, plot_SI_curve_3, rel_widths = c(1, 1.3))
+
+# Add a title above the combined plot
+title = ggdraw() + 
+  theme(plot.background = element_rect(fill = "white", color = NA)) +  # set white background 
+  draw_label("The tree with the smallest SI prediction error", fontface = 'bold', x = 0.5, hjust = 0.5)
+
+# Combine title and plots vertically
+plot_intercepts_SI_3 = plot_grid(title, plot_intercepts_SI_3, ncol = 1, rel_heights = c(0.1, 1))
+
+plot_intercepts_SI_3
+
+
+plot_everything = plot_grid(plot_intercepts_SI_1, plot_intercepts_SI_2, plot_intercepts_SI_3, nrow = 3, ncol = 1)
+
+plot_everything
+```
+
+```{r}
+ggsave("S:\\Users\\maria\\PHD\\Paper_3\\fig\\reviewed_figures\\fig5.tif", plot = plot_everything, device = "tiff", width = 10, height = 16, units = "in", dpi = 500)
+```

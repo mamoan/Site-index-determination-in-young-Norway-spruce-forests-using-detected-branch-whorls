@@ -1,0 +1,87 @@
+---
+title: "Clipping dense ALS to the plots to compare with MLS"
+author: "MÅM"
+date: "2024-02-20"
+output: html_document
+---
+
+
+Aim: Clipping very dense ALS data to the plot radii which I will compare to the MLS data for those plot radii in order to relocate the test and val trees. 
+Output: S:\\Users\\maria\\Paper_3\\data\\plots\\positions_df_transformed.txt
+files in S:\\Users\\maria\\Paper_3\\data\\ALSdata 
+
+```{r}
+library(lidR)
+library(sf)
+library(tidyverse)
+```
+
+
+I am making LAS files in circles with a 10 m radius from the plot center. I do this to quickly check whether the perceived rotation error is due to the MLS scan or if it is from the field collection of positions with compass and distance measurement. 
+
+```{r}
+folder2022 = "S:\\Data\\Norway\\Vaaler\\2022\\3_RemoteSensingData\\ALS\\41740 (Riegl VQ-1560 II-S - High Point Density)\\LidarData_Forestry\\LAS" #LidarData_Forestry contains normalised data
+vaaler_2022 <- list.files(folder2022,
+                             pattern = ".las", full.names = T, recursive = F)
+
+ctg2022 <- readLAScatalog(vaaler_2022)
+
+crs(ctg2022) # I am not entirely sure that the crs used in positioning is the same as the crs of the point cloud. But since this is just a quick test I don't look any more into that now.. The possible error due to crs should not really affect the rotation much anyways I think.. 
+```
+
+
+```{r}
+ps_dt = read.table("R:\\Data\\VaalerIIII\\2023\\MLS\\positioning_data\\positions_df.txt") %>% 
+  relocate(c("Lon.East.", "Lat.North.", "plot"))
+
+# These positions are in ETRS89 UTM sone 32 while the high density ALS dataset is in WGS84 UTM sone 32. 
+# project the positions to the same crs as the ALS data, i.e., WGS 84 UTM sone 32. 
+
+# Create an sf object with these coordinates in ETRS89 UTM Zone 32N
+ps_dt_trns <- st_as_sf(data.frame(ps_dt), coords = c(1, 2), crs = 25832)
+
+# Transform the coordinates to WGS84 UTM Zone 32N (EPSG:32632)
+ps_dt_trns <- st_transform(ps_dt_trns, crs = 32632)
+
+# Extract coordinates from the transformed sf object
+coords <- st_coordinates(ps_dt_trns)
+
+# Convert the coordinates to a data.frame
+ps_dt <- as.data.frame(coords)
+
+# Rename the columns to 'north' and 'east'
+names(ps_dt) <- c("east", "north")
+
+# Add the plot_number column from the original sf object to the coordinates data.frame
+ps_dt$plot <- ps_dt_trns$plot
+
+ps_dt = ps_dt %>% 
+  relocate(c("north", "east", "plot"))
+
+write.table(ps_dt, "S:\\Users\\maria\\Paper_3\\data\\plots\\positions_df_transformed.txt")
+```
+
+```{r}
+cirleLAS = clip_circle(ctg2022, xcenter = ps_dt[,2], ycenter = ps_dt[,1], radius = 10)
+```
+
+
+```{r}
+# Rescale coordinates relative to the center point
+for(i in 1:length(cirleLAS)) {
+  cirleLAS[[i]]@data$X <- cirleLAS[[i]]@data$X - ps_dt[i,2]
+  cirleLAS[[i]]@data$Y <- cirleLAS[[i]]@data$Y - ps_dt[i,1]
+}
+```
+
+
+Here I write the LAS files from each plot.. 
+
+```{r}
+nrow(ps_dt) == length(unique(ps_dt$plot))
+
+for (i in 1:nrow(ps_dt)) {
+  writeLAS(cirleLAS[[i]], paste0("S:\\Users\\maria\\Paper_3\\data\\ALSdata\\", as.character(ps_dt[i,]$plot), ".las"))
+}
+```
+

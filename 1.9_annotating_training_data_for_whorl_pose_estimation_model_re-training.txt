@@ -1,0 +1,6 @@
+Written 06.01.2025
+
+Stefano projected the point clouds in the folder train located in the C:\Users\mamoan\OneDrive - Norwegian University of Life Sciences\PHD\Paper_3_young_stands\data folder
+to the 2D plane using a code that he has. He made images of the sliced point cloud viewed from different angles. These images were uploaded to the website
+trainYOLO.com where I annotated bounding boxes and keypoints for these images. These annotations were used to further train the detector. 
+

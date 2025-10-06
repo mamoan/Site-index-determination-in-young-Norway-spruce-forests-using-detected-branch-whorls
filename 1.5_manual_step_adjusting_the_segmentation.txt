@@ -1,0 +1,10 @@
+Written 19.12.2024
+
+RUN_ONLY_ONCE_export_LAS_files created point clouds of segmented trees in the folders 
+R:\\Data\\VaalerIIII\\2023\\MLS\\test_train_segmented\\test_segmentation\\ and 
+files in R:\\Data\\VaalerIIII\\2023\\MLS\\test_train_segmented\\train_segmentation\\
+
+I went through all files in this folder to see if any of the segmented point clouds needed to be manually segmented. Point clouds were
+manually segmented from scratch if the point clouds revealed that the segmentation had been unsucessful. Sometimes the automatic segmentation was poor and the point clouds were adjusted. 
+
+Results were saved in a new folder structure. Folders test_segmentation and train_segmentation contained the files to be used further.The folders test_automatic_that_had_to_be_edited and train_automatic_that_had_to_be_edited contained copies of the files that were edited in their original version, i.e., before they were edited. 

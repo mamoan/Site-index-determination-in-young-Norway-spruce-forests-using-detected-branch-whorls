@@ -1,0 +1,6 @@
+Written 06.01.2025 
+
+The test, train and val data was shared with my co-author Stefano. From now, on these files that had previously been located in 
+R:\Data\VaalerIIII\2023\MLS\test_train_segmented in the folders test_segmentation, train_segmentation, and val were copied to a 
+new folder that it would be possible to share with Stefano. The location of this folder was C:\Users\mamoan\OneDrive - Norwegian University of Life Sciences\PHD\Paper_3_young_stands\data
+and the folder names were test, train, and val. 

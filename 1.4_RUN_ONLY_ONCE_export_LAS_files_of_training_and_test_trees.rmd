@@ -1,0 +1,226 @@
+---
+title: "export LAS files of training and test trees"
+author: "MÅM"
+date: "2023-12-21"
+output: html_document
+---
+
+Aim: export LAS files of MLS point clouds of training and test trees using their coordinates. 
+Output: files in R:\\Data\\VaalerIIII\\2023\\MLS\\test_train_segmented\\test_automatic_segmentation\\
+files in R:\\Data\\VaalerIIII\\2023\\MLS\\test_train_segmented\\train_automatic_segmentation\\
+files in S:\\Users\\maria\\Paper_3\\data\\fielddata\\domtree_positions_man_seg\\test\\
+files in S:\\Users\\maria\\Paper_3\\data\\fielddata\\domtree_positions_man_seg\\train\\
+
+
+```{r}
+library(lidR)
+library(tidyverse)
+library(data.table)
+library(rgl)
+setwd("S:\\Users\\maria\\Paper_3\\")
+```
+
+
+# Test data
+
+## Import test data 
+
+```{r}
+test_coord_files = list.files("data/test_trees/coordinates")
+test_coord = bind_rows(map(test_coord_files, ~ read.table(paste0("data/test_trees/coordinates/", .x), sep = ",", header = F)))
+
+colnames(test_coord) = c("x", "y", "z", "TreeID", "SegmentedID", "plotname")
+test_coord = as.data.table(test_coord)
+
+test_coord[is.nan(as_vector(test_coord[,"SegmentedID"])), "SegmentedID"] <- NA # Replace NaN with NA 
+```
+
+## Make LAS files of the Segmented trees that correspond to the test trees
+
+```{r}
+test_man_seg = filter(test_coord, is.na(SegmentedID))
+
+test_coord = test_coord[,-"z"] # I do not need the z-coordinate
+
+test_seg = filter(test_coord, !(is.na(SegmentedID))) 
+
+# Just for now I need to take out a few problematic observations.. 
+test_seg = test_seg %>% 
+  mutate(SegmentedID = as.numeric(SegmentedID))
+
+## Looping through each plot and segmenting out trees with the Segmented ID given in the table test_seg. Saving to seperate LAZ files per tree. 
+
+vec_plots_processed_segmented = c(2449402) # For some of the plots, I needed to use the dataset in "R:\\Data\\VaalerIIII\\2023\\MLS\\processed_segmented" because the shift in x,y was so great that the tree ended up outside the 10 meter buffer. 
+
+i = 1
+
+for(i in 1:length(unique(test_seg$plotname))) {
+  
+  test_coord_plot = test_seg %>% 
+    filter(plotname == unique(test_seg$plotname)[i])
+  
+  if(any(test_coord_plot$plotname %in% vec_plots_processed_segmented)) {
+    
+    LAS_file_plot = readLAS(paste0("R:\\Data\\VaalerIIII\\2023\\MLS\\processed_segmented\\", unique(test_seg$plotname)[i],".laz"))
+    
+  } else {
+    
+      LAS_file_plot = readLAS(paste0("R:\\Data\\VaalerIIII\\2023\\MLS\\processed_segmented_clipped\\", unique(test_seg$plotname)[i],".laz"))
+
+  }
+  
+  LAS_file_plot_segmented = list()
+  
+  for (j in 1:nrow(test_coord_plot)) {
+    
+    LAS_file_plot_segmented[[j]] = filter_poi(LAS_file_plot, preds_instance_segmentation == test_coord_plot$SegmentedID[j])
+    
+    writeLAS(LAS_file_plot_segmented[[j]], paste0("R:\\Data\\VaalerIIII\\2023\\MLS\\test_train_segmented\\test_automatic_segmentation\\", test_coord_plot$TreeID[j], ".laz"))
+    
+  }
+  
+}
+
+```
+
+# Train data
+
+## Import train data
+
+```{r}
+train_coord_files = list.files("data/train_trees/coordinates")
+train_coord = map(train_coord_files, ~ read.table(paste0("data/train_trees/coordinates/", .x), sep = ",", header = F))
+train_coord_files_notxt = as.numeric(sub("\\.txt$", "", train_coord_files))
+train_coord1 = map2(train_coord, train_coord_files_notxt, ~ .x %>% 
+                      mutate(plotname = .y)) # Add the plotname 
+train_coord1 = as.data.table(bind_rows(train_coord1))
+
+colnames(train_coord1) = c("x", "y", "z", "SegmentedID", "plotname") # name (and rename) to match names in the test data 
+train_coord1[is.nan(as_vector(train_coord1[,"SegmentedID"])), "SegmentedID"] <- NA # Replace NaN with NA 
+```
+
+
+## Make LAS files of the Segmented trees that correspond to the train trees
+
+```{r}
+train_man_seg = filter(train_coord1, is.na(SegmentedID)) 
+
+traindata = train_coord1[,-"z"] # I don't need z
+
+train_seg = filter(traindata, !(is.na(SegmentedID))) 
+
+# Just for now I need to take out a few problematic observations.. 
+train_seg = train_seg %>% 
+  mutate(SegmentedID = as.numeric(SegmentedID))
+
+
+## Looping through each plot and segmenting out trees with the Segmented ID given in the table train_seg. Saving to seperate LAZ files per tree. 
+
+for(i in 1:length(unique(train_seg$plotname))) {
+  
+  train_coord_plot = train_seg %>% 
+    filter(plotname == unique(train_seg$plotname)[i])
+  
+      LAS_file_plot = readLAS(paste0("R:\\Data\\VaalerIIII\\2023\\MLS\\processed_segmented_clipped\\", unique(train_seg$plotname)[i],".laz"))
+
+  LAS_file_plot_segmented = list()
+  
+  for (j in 1:nrow(train_coord_plot)) {
+    
+    LAS_file_plot_segmented[[j]] = filter_poi(LAS_file_plot, preds_instance_segmentation == train_coord_plot$SegmentedID[j])
+    
+    writeLAS(LAS_file_plot_segmented[[j]], paste0("R:\\Data\\VaalerIIII\\2023\\MLS\\test_train_segmented\\train_automatic_segmentation\\", train_coord_plot$plotname[j], "_", j, ".laz"))
+    
+  }
+  
+}
+
+```
+
+
+# Save the positions of dominant trees to use in the manual segmentation
+
+```{r}
+length(unique(test_man_seg$plotname))
+length(unique(train_man_seg$plotname))
+```
+
+
+```{r}
+# save test tree positions for manual segmentation
+
+test_man_seg1 = test_man_seg %>% 
+  filter(!is.na(x) & !is.na(y) & !is.na(z)) # Only trees which have a measured coordinate should be considered. 
+
+test_path = "S:\\Users\\maria\\Paper_3\\data\\fielddata\\domtree_positions_man_seg\\test\\"
+
+for(i in 1:length(unique(test_man_seg1$plotname))) {
+  
+  test_file = test_man_seg1 %>% 
+    filter(plotname == unique(test_man_seg1$plotname)[i])
+  
+  new_test_name = as.character(unique(test_file$plotname))
+  
+  write.table(test_file, paste0(test_path, new_test_name, ".txt"), col.names = F, row.names = F, sep = ",")
+  
+}
+
+```
+
+
+```{r}
+# save train tree positions for manual segmentation
+
+train_man_seg1 = train_man_seg %>% 
+  filter(!is.na(x) & !is.na(y) & !is.na(z)) # Only trees which have a measured coordinate should be considered. 
+
+train_path = "S:\\Users\\maria\\Paper_3\\data\\fielddata\\domtree_positions_man_seg\\train\\"
+
+for(i in 1:length(unique(train_man_seg1$plotname))) {
+  
+  train_file = train_man_seg1 %>% 
+    filter(plotname == unique(train_man_seg1$plotname)[i])
+  
+  new_train_name = as.character(unique(train_file$plotname))
+  
+  write.table(train_file, paste0(train_path, new_train_name, ".txt"), col.names = F, row.names = F, sep = ",")
+  
+}
+```
+
+
+# Import segmented clipped LAS files
+
+```{r}
+check2 = filter(testdata, !(is.na(SegmentedID))) # 49 testing trees.. 
+
+# Just for now I need to take out a few problematic observations.. 
+check2 = na.omit(check2)
+check2 = check2 %>% 
+  mutate(SegmentedID = as.numeric(SegmentedID))
+
+
+for(i in 1:nrow(check2)) {
+  
+  check1 = readLAS(paste0("R:\\Data\\VaalerIIII\\2023\\MLS\\processed_segmented_clipped\\", check2[i,]$CloudProcSegID,".laz"))
+  
+  test = filter_poi(check1, preds_instance_segmentation == check2[i,]$SegmentedID)
+  
+  plot(test)
+  
+  rgl.postscript(paste0("S:/Users/maria/Paper_3/processing/images_of_segmented_chosen_trees/test/",check2[i,]$CloudProcSegID, "_",check2[i,]$SegmentedID,".pdf"), fmt = "pdf")
+  
+  # Clear the 'rgl' device
+  rgl.clear()
+  
+}
+
+check1 = readLAS(paste0("R:\\Data\\VaalerIIII\\2023\\MLS\\processed_segmented_clipped\\", check2[1,]$CloudProcSegID,".laz"))
+
+check1 = readLAScatalog(paste0("R:\\Data\\VaalerIIII\\2023\\MLS\\processed_segmented_clipped\\"))
+
+test = filter_poi(check1, preds_instance_segmentation == check2[1,]$SegmentedID)
+
+# plot(check1, color = preds_instance_segmentation)
+plot(test)
+```

@@ -1,0 +1,56 @@
+---
+title: "Appendices"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+```
+
+# Appendix
+
+I will show the distribution of confidence scores. I will use all the trees that have a prediction for this and not only the ones used in the calculation of RMSEs. Then maybe later I will decide to not do that.
+
+```{r}
+
+start_of_section = 1.30
+end_of_section = 8.00 
+
+p_dat = read.csv("S:\\Users\\maria\\Paper_3\\data\\results_prediction\\all_test_trees_treeID_whorls_pc_HKL2model_24cmthresh.csv") %>%
+  filter(!(treeID %in% c("24494101", "24508071"))) %>% # These trees were removed in 2.1 and 2.2.  
+  select(c("z", "confidence_p2", "treeID")) %>%
+  mutate(treeID = as.character(treeID)) %>%
+  filter(z >= start_of_section & z <= end_of_section)
+
+length(unique(p_dat$treeID))
+
+```
+
+Make plot.
+
+```{r}
+ggplot(p_dat) +
+  geom_histogram(aes(confidence_p2), binwidth = 0.0002) +
+  theme_bw() +
+  xlab("Confidence score") +
+  ylab("Count") +
+  theme(
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12), # Customize y-axis text
+    legend.title = element_blank(), # Customize legend title
+    legend.text = element_text(size = 14), # Customize legend text
+    strip.text = element_text(size = 14)
+  ) -> appendixfig
+
+appendixfig
+```
+
+Save
+
+```{r}
+
+ggsave(plot = appendixfig, paste0("S:\\Users\\maria\\Paper_3\\fig\\S1.tif"), device = "tiff", width = 6, height = 3.5, units = "in", dpi = 500)
+```

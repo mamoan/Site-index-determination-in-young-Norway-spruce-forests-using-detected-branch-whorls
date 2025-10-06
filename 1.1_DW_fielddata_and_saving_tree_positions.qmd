@@ -1,0 +1,560 @@
+---
+title: "1_DW_fielddata_and_saving_tree_position"
+format: html
+editor: visual
+---
+
+Aim: Importing raw data and exporting it into a format that is easier for the data analysis
+
+1.  Plot positions
+2.  Field data. Additionally to making the data easier to read, I am also excluding data that I do not want to use for further analyses, i.e., drilled trees and trees deemed as unsuitable. Drilled trees are removed because the SI of a drilled tree cannot be used to compare with the SI of branch whorl counting directly. SI from drilling is based on the whole height development of the tree while the branch whorl counting will only contain some of it.
+3.  Dataset of tree positions
+4.  A circle indicating the plot border to use in the processing in CloudCompare.
+
+Output: R:\\Data\\VaalerIIII\\2023\\MLS\\positioning_data\\positions_df.txt
+
+S:\\Users\\maria\\Paper_3\\data\\fielddata\\fielddata.rds
+
+files in S:\\Users\\maria\\Paper_3\\data\\fielddata\\domtree_positions_plotnr\\
+
+S:\\Users\\maria\\Paper_3\\data\\fielddata\\domtree_positions.txt
+
+files in S:\\Users\\maria\\Paper_3\\data\\fielddata\\domtree_positions_MLS_names\\
+
+S:\\Users\\maria\\Paper_3\\data\\plots\\circle_8m_radius.txt
+
+```{r}
+library(data.table)
+library(tidyverse)
+library(readxl)
+library(lidR)
+library(dagR)
+library("zoo")
+
+source("S:\\Users\\maria\\PHD\\Paper_3\\code_github\\0_functions_used_in_this_paper.R")
+
+setwd("R:\\Data\\VaalerIIII\\2023\\MLS\\")
+```
+
+# 1. Plot positions
+
+```{r}
+files = list.files("R:\\Data\\VaalerIIII\\2023\\MLS\\positioning_data", pattern = "^M")
+
+positions = list()
+
+for(i in 1:length(files)) {
+  positions[[i]] = read.csv(paste0("R:\\Data\\VaalerIIII\\2023\\MLS\\positioning_data\\",files[i]), row.names = NULL)
+
+  names(positions[[i]]) = c(names(positions[[i]])[2:ncol(positions[[i]])])
+
+  positions[[i]] = as.data.table(positions[[i]])
+
+  positions[[i]] = positions[[i]][Solution.Type.... == "FIXED"]
+
+  positions[[i]]$X..FileFormat.Name = as.character(positions[[i]]$X..FileFormat.Name)
+  positions[[i]]$HRMS = as.numeric(positions[[i]]$HRMS)
+}
+
+positions_tab = bind_rows(positions) 
+
+positions_tab$plot <- as.numeric(sub("(_stk).*", "", positions_tab$X..FileFormat.Name))
+
+positions_tab = positions_tab %>% 
+  filter(!(plot %in% c(100, 102)))
+
+
+# Selecting the highest value of stk for plots where several measurements of the position was made.. I do this manually because there are not many plots with several measurements. 3013711 was removed because I already had a stk version of this plot with the same coordinates
+positions_tab = positions_tab %>% 
+  filter(!(X..FileFormat.Name %in% c("2449403_stk", "2501605_stk", "2501606_stk", "2517801_stk", "2519110_stk", "2519110_stk1", "2519110_stk2", "2520405_stk", "2525705_stk", "2526106_stk", "2540902_stk", "2540921_stk", "3013711")))
+
+
+
+```
+
+Get the range in HRMS to write about in the paper.
+
+```{r}
+
+boxplot(positions_tab$HRMS) # Some outliers
+min(positions_tab$HRMS)*100 # In cm 
+max(positions_tab$HRMS)*100 # In cm 
+sort(positions_tab$HRMS) # 6.5 is an outlier 
+```
+
+```{r}
+
+positions_tab = positions_tab %>% 
+  select(c("Lat.North.", "Lon.East.", "plot"))
+
+plot(positions_tab$Lon.East., positions_tab$Lat.North.)
+```
+
+```{r}
+write.table(positions_tab, "R:\\Data\\VaalerIIII\\2023\\MLS\\positioning_data\\positions_df.txt")
+```
+
+# 2. Field data
+
+# 2.1 Make one dataframe with field data
+
+```{r}
+folder_path = "field_data_raw"
+
+files_field <- dir(path = folder_path, pattern = "^[^~$]") # list the files, but not the temp-files that start with ~$
+files_filtered <- files_field[!grepl("\\.txt$", files_field)]# Filter out files ending with .txt
+files_field = paste0(folder_path, "\\", files_filtered)
+
+field_dat_overview = map(files_field, ~ read_excel(.x, sheet = 1, col_names = F))
+field_dat= map(files_field, ~ read_excel(.x, sheet = 2))
+```
+
+rename columns
+
+```{r}
+# Define a function to rename columns if they exist
+rename_columns = function(df) {
+  if ("...7" %in% colnames(df)) {
+    colnames(df)[colnames(df) == "...7"] <- "Comment_1"
+  }
+  if ("...8" %in% colnames(df)) {
+    colnames(df)[colnames(df) == "...8"] <- "Comment_2"
+  }
+  return(df)
+}
+
+field_dat = map(field_dat, rename_columns)
+```
+
+Make the dataframes nicer
+
+```{r}
+field_dat2 = map(field_dat, ~ .x %>%
+             select(!starts_with("...")) %>%
+               mutate(`Lengde (dm)` = as.numeric(`Lengde (dm)`))) # There are some NAs in `Lengde (dm)`, why?
+
+map(field_dat, ~ (unique(.x$`Lengde (dm)`)))
+map(field_dat2, ~ (unique(.x$`Lengde (dm)`)))
+
+
+which(unlist(map2(field_dat, field_dat2, ~ all(.x$`Lengde (dm)` %in% .y$`Lengde (dm)`))) == FALSE)
+
+field_dat[[12]]$`Lengde (dm)` # In this example (and it is the same in the other cases) I see that it was written something in the Lengde (dm) column which is deleted when using as.numeric(). That is okay
+field_dat2[[12]]$`Lengde (dm)`
+
+field_dat[[64]]$`Lengde (dm)` # In this example (and it is the same in the other cases) I see that it was written something in the Lengde (dm) column which is deleted when using as.numeric(). That is okay
+field_dat2[[64]]$`Lengde (dm)`
+
+field_dat[[65]]$`Lengde (dm)` # In this example (and it is the same in the other cases) I see that it was written something in the Lengde (dm) column which is deleted when using as.numeric(). That is okay
+field_dat2[[65]]$`Lengde (dm)`
+
+field_dat_overview = map(field_dat_overview, ~ .x %>%
+     rename(namecols = ...1,
+         valuecols = ...2) %>%
+      spread(key = namecols, value = valuecols))
+
+field_dat = map2(field_dat2, field_dat_overview, ~ .x %>%
+                   mutate(plotnr = .y$Flatenr))
+```
+
+Combine dataframes
+
+```{r}
+field_dat1 = bind_rows(field_dat)
+```
+
+Add information on the stand number to the dataframe. The stand number is the plotnr minus the two last digits.
+
+```{r}
+field_dat1$standnr <- sub("..$", "", field_dat1$plotnr) # remove two last units using a regular expression.
+length(unique(field_dat1$standnr))
+```
+
+```{r}
+field_dat1$Trenr = na.locf(field_dat1$Trenr) # replace the NA with the value that came before it 
+field_dat1$Avstand = na.locf(field_dat1$Avstand) 
+field_dat1$Retning = na.locf(field_dat1$Retning)
+field_dat1$diameter = na.locf(field_dat1$diameter)
+
+field_dat1 %>% 
+  mutate(plot_and_tree = paste0(plotnr, "_", as.character(Trenr))) -> field_dat1
+```
+
+Remove unsuitable trees and trees that are drilled, and any rows with NA values for Length or a Length over 8 meters. I am using a maximum height of 8 meters for all trees even though some trees were measured with a 10 m rod because I don't want any variation/noise due to which rod was used. That is not important.
+
+If I only retain rows where the Length is bellow 801 meters, I will automatically exclude all unsuitable or drilled trees (because they have NA for Length).
+
+```{r}
+
+99*2
+length(unique(field_dat1$plot_and_tree)) # Checking the number of trees before I remove unsuitable and drilled trees. 
+
+field_dat1 = field_dat1 %>%
+  group_by(plot_and_tree) %>%
+  filter(!(all(is.na(`Lengde (dm)`)))) %>%
+  ungroup()
+
+
+# I think I have seen that one tree is disappearing when I do the command in the chunk bellow: filter(`Lengde (dm)` < 801 & `Lengde (dm)` > 129) %>% # Only Lengde (dm) in the range 1.30 m - 8 m. I want to see which tree this is. 
+
+field_dat_test = field_dat1 %>% 
+  filter(`Lengde (dm)` < 801 & `Lengde (dm)` > 129)
+field_dat_test1 = field_dat1
+
+which(!(unique(field_dat_test1$plot_and_tree) %in% unique(field_dat_test$plot_and_tree)))
+unique(field_dat_test1$plot_and_tree)[182] # I have looked at which tree this is in the dataframe and I see that this is a drilled tree.
+
+field_dat1 %>% 
+  group_by(plotnr) %>% 
+  summarise(uniqplottree = length(unique(plot_and_tree))) %>% 
+  filter(uniqplottree != 2)
+
+length(unique(field_dat1$plot_and_tree)) # Checking the number of trees after I do this. 
+
+# looks like all plots have at least one tree with a measurement of whorls, i.e. there are no plots that only have drilled or unsuitable trees
+```
+
+```{r}
+
+field_dat1 = field_dat1 %>% 
+  filter(`Lengde (dm)` < 801 & `Lengde (dm)` > 129) %>% # Only Lengde (dm) in the range 1.30 m - 8 m
+  mutate(Lengde_m = `Lengde (dm)`/100, # Lengde is Length in Norwegian. This lengde was not really measured in dm but in cm. I therefore divide by 100 to get it in m. 
+         diameter_cm = diameter/10) %>% 
+  select(-c("Lengde (dm)", "diameter")) %>% 
+  relocate(c("standnr", "plotnr", "plot_and_tree", "Trenr", "Avstand", "Retning", "Kvistkrans", "Lengde_m", "diameter_cm", "Comment_1",  "Comment_2")) %>% 
+  as.data.table()
+
+
+```
+
+A little check of which plots do not have 2 trees.. and plots that have drilled trees, is that drilled tree an extra tree or used as one of the two trees?
+
+```{r}
+
+length(unique(field_dat1$plot_and_tree))
+
+field_dat1 %>% 
+  select(c("plotnr", "Trenr")) %>% 
+  distinct()%>% 
+  count(plotnr) %>% 
+  filter(n != 2)
+
+
+pattern_drilled1 <- "drill|Drill" 
+drilled_comments1 = sort(unique(field_dat1$Comment_1))[grepl(pattern_drilled1, sort(unique(field_dat1$Comment_1)), ignore.case = TRUE)]
+
+field_dat1 %>% 
+  select(c("plotnr", "Trenr", "Comment_1")) %>% 
+  filter(Comment_1 %in% drilled_comments1) %>% 
+  distinct()
+```
+
+Then I check that the Lengde_m is only increasing and the Kvistkrans is starting at 1 and increasing
+
+```{r}
+plot_and_tree_with_errors = list()
+
+for(i in 1:length(unique(field_dat1$plot_and_tree))) {
+  
+  field_dat1_test = field_dat1 %>% 
+    filter(plot_and_tree == unique(field_dat1$plot_and_tree)[i])
+  
+  if((!(1 %in% field_dat1_test$Kvistkrans)) | any(diff(field_dat1_test$Kvistkrans) != 1) | any(diff(field_dat1_test$Lengde_m) < 0)) {
+    plot_and_tree_with_errors[[i]] = unique(field_dat1_test$plot_and_tree)
+  }
+  
+}
+
+plot_and_tree_with_errors = unlist(plot_and_tree_with_errors)
+```
+
+Going through each observation with an error and seeing what it is. Here, there are several instances where I feel very certain about the error in Lengde. Still I have chosen not to correct this error, but instead delete these cases from the dataset, because it is going to be hard to justify why I am sure in the study, unfortunately. Luckily, there are not many plots that go out anyways. I have kept the code for when I chose to keep these instances, changing the Lengde manually in case I want to do this later.
+
+```{r}
+field_dat1 %>% 
+    filter(plot_and_tree== plot_and_tree_with_errors[1]) -> field_dat1_test
+
+!(1 %in% field_dat1_test$Kvistkrans)
+any(diff(field_dat1_test$Kvistkrans) != 1)
+any(diff(field_dat1_test$Lengde_m) < 0) # I do have a theory that kvistkrans 9 is wrong, but it would imply some guessing, so I delete this tree and from the final field data. 
+
+field_dat1 = field_dat1[!(plot_and_tree == plot_and_tree_with_errors[1])]
+
+##
+
+field_dat1 %>% 
+    filter(plot_and_tree== plot_and_tree_with_errors[2]) -> field_dat1_test
+
+!(1 %in% field_dat1_test$Kvistkrans)
+any(diff(field_dat1_test$Kvistkrans) != 1)
+any(diff(field_dat1_test$Lengde_m) < 0) # I am not sure which tree has the wrong length, so I delete this tree and from the final field data. 
+
+field_dat1 = field_dat1[!(plot_and_tree == plot_and_tree_with_errors[2])]
+
+##
+
+field_dat1 %>% 
+    filter(plot_and_tree== plot_and_tree_with_errors[3]) -> field_dat1_test
+
+!(1 %in% field_dat1_test$Kvistkrans)
+any(diff(field_dat1_test$Kvistkrans) != 1)
+any(diff(field_dat1_test$Lengde_m) < 0) # I am pretty sure I know which is the correct measurement..  
+
+field_dat1 = field_dat1[!(plot_and_tree == plot_and_tree_with_errors[3])]
+# field_dat1[plot_and_tree==plot_and_tree_with_errors[3] & Kvistkrans == 5 & Lengde_m == 5.57]$Lengde_m =  4.57. # Code for if I were to do the manual change in Lengde to correct the error. 
+
+##
+
+field_dat1 %>% 
+    filter(plot_and_tree== plot_and_tree_with_errors[4]) -> field_dat1_test
+
+!(1 %in% field_dat1_test$Kvistkrans)
+any(diff(field_dat1_test$Kvistkrans) != 1) # One kvistkrans is missing. It is hard to say what happened. I delete this tree 
+any(diff(field_dat1_test$Lengde_m) < 0)
+
+field_dat1 = field_dat1[!(plot_and_tree == plot_and_tree_with_errors[4])]
+
+##
+
+field_dat1 %>% 
+    filter(plot_and_tree== plot_and_tree_with_errors[5]) -> field_dat1_test
+
+!(1 %in% field_dat1_test$Kvistkrans) # Kvistkrans nr 1 is gone after I removed Lengde_m under 1.30 m. I will rename all Kvistkranses for this plot 
+any(diff(field_dat1_test$Kvistkrans) != 1)
+any(diff(field_dat1_test$Lengde_m) < 0) 
+
+field_dat1[plot_and_tree==plot_and_tree_with_errors[5]]$Kvistkrans = 1:length(field_dat1[plot_and_tree==plot_and_tree_with_errors[5]]$Kvistkrans) # renaming the kvistkrans, so I have them starting at 1. 
+
+## 
+
+field_dat1 %>% 
+    filter(plot_and_tree== plot_and_tree_with_errors[6]) -> field_dat1_test
+
+!(1 %in% field_dat1_test$Kvistkrans) 
+any(diff(field_dat1_test$Kvistkrans) != 1)
+any(diff(field_dat1_test$Lengde_m) < 0) # I am pretty sure I know which is the correct measurement.. 
+
+field_dat1 = field_dat1[!(plot_and_tree == plot_and_tree_with_errors[6])]
+# field_dat1[plot_and_tree==plot_and_tree_with_errors[6] & Kvistkrans == 3 & Lengde_m == 4.45]$Lengde_m =  2.45 # Code for if I were to do the manual change in Lengde to correct the error. 
+
+## 
+
+field_dat1 %>% 
+    filter(plot_and_tree== plot_and_tree_with_errors[7]) -> field_dat1_test
+
+!(1 %in% field_dat1_test$Kvistkrans) 
+any(diff(field_dat1_test$Kvistkrans) != 1)
+any(diff(field_dat1_test$Lengde_m) < 0) # I am pretty sure I know which is the correct measurement.. 
+
+field_dat1 = field_dat1[!(plot_and_tree == plot_and_tree_with_errors[7])]
+# field_dat1[plot_and_tree==plot_and_tree_with_errors[7] & Kvistkrans == 4 & Lengde_m == 2.51]$Lengde_m =  3.51 # Code for if I were to do the manual change in Lengde to correct the error. 
+
+##
+
+field_dat1 %>% 
+    filter(plot_and_tree== plot_and_tree_with_errors[8]) -> field_dat1_test 
+
+!(1 %in% field_dat1_test$Kvistkrans) 
+any(diff(field_dat1_test$Kvistkrans) != 1)
+any(diff(field_dat1_test$Lengde_m) < 0)# I am pretty sure I know which is the correct measurement.. 
+
+field_dat1 = field_dat1[!(plot_and_tree == plot_and_tree_with_errors[8])]
+# field_dat1[plot_and_tree==plot_and_tree_with_errors[8] & Kvistkrans == 3 & Lengde_m == 1.99]$Lengde_m =  2.99 # Code for if I were to do the manual change in Lengde to correct the error. 
+
+field_dat1 %>% 
+    filter(plot_and_tree== plot_and_tree_with_errors[9]) -> field_dat1_test 
+!(1 %in% field_dat1_test$Kvistkrans) # Kvistkrans nr 1 is gone after I removed Lengde_m under 1.30 m. I will rename all Kvistkranses for this plot  
+any(diff(field_dat1_test$Kvistkrans) != 1)
+any(diff(field_dat1_test$Lengde_m) < 0)
+
+field_dat1[plot_and_tree==plot_and_tree_with_errors[9]]$Kvistkrans = 1:length(field_dat1[plot_and_tree==plot_and_tree_with_errors[9]]$Kvistkrans) # renaming the kvistkrans, so I have them starting at 1. 
+
+length(unique(field_dat1$plotnr)) # still the same number of plots remain.. 
+```
+
+Save again
+
+```{r}
+test = readRDS("S:\\Users\\maria\\PHD\\Paper_3\\data\\fielddata\\fielddata.rds")
+# length(unique(test$plotnr))
+# 
+# field_dat = readRDS("S:\\Users\\maria\\PHD\\Paper_3\\data\\fielddata\\fielddata.rds") %>% 
+#   select(-c("Trenr", "Avstand", "Retning", "Comment_1", "Comment_2")) %>% 
+#   mutate(treeID = str_replace(plot_and_tree, "_", "")) %>% 
+#   mutate(treeID = as.numeric(treeID)) %>% 
+#   group_by(treeID) %>% 
+#   filter(Lengde_m > 2.5 & Lengde_m <= 8) %>% 
+#   mutate(Kvistkrans = row_number()) %>% # Renumber the Kvistkrans after selecting only Kvistkranses over 2.5 meters 
+#   ungroup() %>% 
+#   as.data.table() 
+# 
+# length(unique(field_dat$plotnr))
+# 
+# length(unique(field_dat1$plotnr))
+# 
+# 99*2
+# 
+# field_dat1 %>% 
+#   group_by(plotnr) %>% 
+#   summarise(n_trees = length(unique(plot_and_tree))) -> test1
+# 
+# length(unique(field_dat$plot_and_tree))
+# length(unique(field_dat1$plot_and_tree))
+# 
+# length(unique(field_dat1$plot_and_tree))-length(unique(field_dat$plot_and_tree))
+# 
+# table(field_dat1$plot_and_tree)
+
+saveRDS(field_dat1, "S:\\Users\\maria\\PHD\\Paper_3\\data\\fielddata\\fielddata.rds")
+```
+
+# 3 Make a dataset with the tree positions from the tree data
+
+I want to export the relative coordinates of all trees that were measured to a text file with x,y,z coordinates and treeID. This can then be used in CloudCompare. If the tree was not a dominant tree but instead unsuitable I still want to import it, but I want to add a suffix saying that it is unsuitable.
+
+```{r}
+field_dat = readRDS("S:\\Users\\maria\\Paper_3\\data\\fielddata\\fielddata.rds")
+
+sort(unique(field_dat$Comment_1))
+
+pattern_drilled <- "drill|Drill" 
+drilled_comments = sort(unique(field_dat$Comment_1))[grepl(pattern_drilled, sort(unique(field_dat$Comment_1)), ignore.case = TRUE)]
+
+pattern_unsuit <- "unsuit|overstanding|ikke egnet|from old stand"
+unsuit_comments = sort(unique(field_dat$Comment_1))[grepl(pattern_unsuit, sort(unique(field_dat$Comment_1)), ignore.case = TRUE)] # seems like there are no unsuitable trees
+
+unique(field_dat$Comment_2)
+
+# field data of dominant trees with counted branch whorls 
+field_dat_pos = field_dat %>% 
+  select(c("plotnr", "Trenr", "Avstand", "Retning", "Comment_1")) %>% 
+  filter(!(Comment_1 %in% c(unsuit_comments, drilled_comments))) %>% 
+  select(-c("Comment_1")) %>% 
+  distinct() %>% 
+  na.omit() %>% 
+  mutate(unsuitable = "") # tell whether trees are unsuitable
+
+table(field_dat_pos$plotnr) 
+
+# field data of dominant trees that were drilled  
+field_dat_pos_drilled = field_dat %>% 
+  select(c("plotnr", "Trenr", "Avstand", "Retning", "Comment_1")) %>% 
+  filter(Comment_1 %in% drilled_comments) %>% 
+  select(-c("Comment_1")) %>% 
+  distinct() %>% 
+  na.omit() %>% 
+  mutate(unsuitable = "drilled") # tell whether trees are unsuitable
+
+# field data of unsuitable dominant trees 
+field_dat_pos_unsuit = field_dat %>% 
+  select(c("plotnr", "Trenr", "Avstand", "Retning", "Comment_1")) %>% 
+  filter(Comment_1 %in% unsuit_comments) %>% 
+  select(-c("Comment_1")) %>% 
+  distinct() %>% 
+  na.omit() %>% 
+  mutate(unsuitable = "unsuitable") # tell whether trees are unsuitable
+
+field_dat_pos = full_join(field_dat_pos, field_dat_pos_unsuit, by = colnames(field_dat_pos)) %>% 
+  full_join(field_dat_pos_drilled, by = colnames(field_dat_pos))# Add together
+
+# I remove all observations with a Retning above 400 m and a Avstand above 800. 
+field_dat_pos = field_dat_pos %>% 
+  filter(Retning <= 400 & Avstand <= 800)
+
+length(unique(field_dat_pos$plotnr)) 
+```
+
+Calculate the position to the north and the east
+
+```{r}
+field_dat_pos = field_dat_pos %>% 
+  mutate(Avstand = Avstand/100, # Get dist in meter
+         radian = Retning/(400/(2*pi))) %>%  # get radian 
+  filter(is.na(radian)==F,)
+
+kk<--1*(anglePoint(c(rep(0, nrow(field_dat_pos)),rep(0, nrow(field_dat_pos))), field_dat_pos$radian, field_dat_pos$Avstand))
+xcoo<-kk[1:(length(kk)/2)]
+ycoo<-kk[((length(kk)/2)+1):length(kk)]
+
+field_dat_pos<-cbind(field_dat_pos, xcoo, ycoo)
+
+field_dat_pos = field_dat_pos %>% 
+  rename(x = xcoo, 
+         y = ycoo) %>% 
+  mutate(z = 10) # I would actually assume the z is zero because I didn't register that, but I set it to 25 for the purposes of visualizing the points in CloudCompare. Because if I put it to zero he points are under tha canopy and hard to see. 
+```
+
+Make unique treeID
+
+```{r}
+field_dat_pos = field_dat_pos %>% 
+  mutate(treeID = paste0(plotnr, "_", Trenr, unsuitable)) %>% 
+  select(c("x", "y", "z", "treeID", "plotnr"))
+```
+
+Save the data as textfiles (I want seperate textfiles per plotnr)
+
+```{r}
+unique(field_dat_pos$treeID)
+
+## Saving files as plot names 
+
+field_dat_pos_split <- split(field_dat_pos, field_dat_pos$plotnr)
+
+map2(field_dat_pos_split, unique(field_dat_pos$plotnr), ~ .x %>% 
+       select(-c("plotnr")) %>% 
+      write.table(file = paste0("S:\\Users\\maria\\Paper_3\\data\\fielddata\\domtree_positions_plotnr\\", as.character(.y),".txt"), sep = "\t", row.names = FALSE))
+
+
+## Saving all positions together 
+write.table(field_dat_pos, file = "S:\\Users\\maria\\Paper_3\\data\\fielddata\\domtree_positions.txt", sep = "\t", row.names = FALSE)
+
+## Saving files as MLS names 
+field_dat_pos1 = as.data.table(field_dat_pos)
+
+for(i in 1:length(unique(field_dat_pos1$plotnr))) {
+  field_dat_pos1[plotnr %in% unique(field_dat_pos1$plotnr)[i], "plotnr"] = mls_filename_from_plotnr(unique(field_dat_pos1$plotnr)[i])
+}
+
+field_dat_pos1_split <- split(field_dat_pos1, field_dat_pos1$plotnr)
+
+plot_center = data.table(x = 0, 
+           y = 0, 
+           z = 10, 
+           treeID = "")
+
+plot_center = replicate(length(field_dat_pos1_split), plot_center, simplify = FALSE)
+
+plot_center = map2(plot_center, field_dat_pos1_split, ~ .x %>% 
+              mutate(plotnr = unique(.y$plotnr)))
+
+field_dat_pos1_split = map2(field_dat_pos1_split, plot_center, ~ .x %>% 
+                            full_join(.y, by = c("x", "y", "z", "treeID", "plotnr")))
+
+# make sure the plotnr in field_dat_pos1_split is the same as the plotnr in field_dat_pos1$plotnr.  
+map2(field_dat_pos1_split, names(field_dat_pos1_split), ~ .x %>% 
+      select(-c("plotnr")) %>% 
+      write.table(file = paste0("S:\\Users\\maria\\Paper_3\\data\\fielddata\\domtree_positions_MLS_names\\", as.character(.y),".txt"), sep = "\t", row.names = FALSE)) 
+```
+
+# 4 Make a circle with a radius of 8 meters
+
+This is used to check whether trees are inside or outside the plots when deciding on training trees.
+
+```{r}
+library(sf)
+
+# Create a 2D point
+dub <- st_point(x = c(0, 0))
+
+# Create a buffer around the point (in 2D)
+dub_buffer <- st_buffer(st_sfc(dub, crs = 4326), 8)
+
+dub_buffer <- st_buffer(dub, 8)
+
+# Create a data frame
+df <- data.frame(x = dub_buffer[[1]][,1], y = dub_buffer[[1]][,2], z = rep(25, nrow(dub_buffer[[1]])), ID  = rep("", nrow(dub_buffer[[1]])))
+
+# Write to a text file
+write.table(df, file = "S:\\Users\\maria\\Paper_3\\data\\plots\\circle_8m_radius.txt", sep = "\t", row.names = FALSE)
+```

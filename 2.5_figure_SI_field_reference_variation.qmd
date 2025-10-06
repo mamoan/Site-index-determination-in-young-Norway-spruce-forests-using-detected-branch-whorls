@@ -1,0 +1,183 @@
+---
+title: "3.4_Plot_of_fieldmeasured_SI_with_different_intercepts"
+format: html
+editor: visual
+---
+
+# Plot of how the SI might vary with different intercepts
+
+Here, I will make a plot of how the SI might vary with different intercepts..
+
+```{r}
+library("zoo")
+library(tidyverse)
+library(data.table)
+
+source("S:\\Users\\maria\\functions\\SiteIndex.func_modifyed4.R")
+```
+
+Import field data
+
+```{r}
+
+field_dat1 = readRDS("S:\\Users\\maria\\PHD\\Paper_3\\data\\fielddata\\fielddata.rds") %>% 
+  select(-c("Trenr", "Avstand", "Retning", "Comment_1", "Comment_2")) %>% 
+  mutate(treeID = str_replace(plot_and_tree, "_", "")) %>% 
+  mutate(treeID = as.numeric(treeID)) %>% 
+  group_by(treeID) %>% 
+  filter(Lengde_m > 2.5 & Lengde_m <= 8) %>% 
+  mutate(Kvistkrans = row_number()) %>% # Renumber the Kvistkrans after selecting only Kvistkranses over 2.5 meters 
+  ungroup() %>% 
+  as.data.table()  
+
+```
+
+Make matrix of calculated site indexes, starting with just some trees
+
+```{r}
+trees_in_stand = unique(field_dat1$treeID)
+
+site_index_matrix_list = list()
+num_whorls_list = list()
+
+for (i in 1:length(trees_in_stand)) {
+
+  field_dat1_tree = field_dat1 %>% 
+    filter(treeID == trees_in_stand[i]) 
+
+  num_whorls = max(field_dat1_tree$Kvistkrans)
+
+  site_index_matrix <- matrix(nrow = num_whorls, ncol = num_whorls)
+
+  if(num_whorls >= 6) {
+  # Calculate site index for all possible intervals
+  for (start in 1:(num_whorls - 5)) {
+    for (end in (start + 5):num_whorls) {
+      site_index_matrix[start, end] <- calc_SI_MultiTemp(hts = c(field_dat1_tree[Kvistkrans == start, ]$Lengde_m, field_dat1_tree[Kvistkrans == end, ]$Lengde_m), yrs = c((2022-(end-start)), 2022), SP = 1)[[1]] # only spruce trees were measured
+      }
+    }
+  }
+  
+  site_index_matrix_list[[i]] = site_index_matrix
+  num_whorls_list[[i]] = num_whorls
+
+}
+
+```
+
+Make a plot for each tree
+
+```{r}
+
+convert_matrix_to_df = function(mat) {
+  # Get row and column indices
+  cols = rep(1:ncol(mat), each = nrow(mat))
+  rows = rep(1:nrow(mat), times = ncol(mat))
+  
+  # Get values from the matrix
+  values = as.vector(mat)
+  
+  # Create a data frame with specified column names
+  df = data.frame(start = rows, end = cols, value = values)
+  
+  return(df)
+}
+
+
+# Apply the function to each matrix in the list
+data_frames = lapply(site_index_matrix_list, convert_matrix_to_df)
+data_frames = map2(data_frames, as.list(trees_in_stand), ~ .x %>% mutate(treeID = .y))
+data_frames = bind_rows(data_frames) %>% 
+  na.omit()
+
+data_frames1 = data_frames 
+```
+
+A plot showing the extremes for each tree and the result for all whorls
+
+```{r}
+
+# Make a data.frame containing the values which is the minimum SI, the maximum SI, and the all whorls 
+
+data_frames_extr1 = data_frames1 %>%
+  group_by(treeID) %>%
+  filter(start == 1 & end == max(end)) %>% 
+  mutate(type = "All whorls") %>% 
+  ungroup()
+
+data_frames_extr2 = data_frames1 %>% 
+  group_by(treeID) %>% 
+  filter(value == max(value)) %>% 
+  mutate(type = "Maximum SI") %>% 
+  ungroup()
+
+data_frames_extr3 = data_frames1 %>% 
+  group_by(treeID) %>% 
+  filter(value == min(value)) %>% 
+  mutate(type = "Minimum SI") %>% 
+  ungroup()
+
+data_frames_extr = bind_rows(data_frames_extr1, data_frames_extr2) %>%
+  bind_rows(data_frames_extr3)
+
+
+# Make a data.frame with the minimum and maximum value in one row 
+
+data_frames_extr4 = data_frames1 %>%
+  group_by(treeID) %>%
+  mutate(min_value = min(value), 
+         max_value = max(value)) %>%
+  select(c("min_value", "max_value", "treeID")) %>% 
+  ungroup() %>% 
+  distinct()
+
+
+
+```
+
+I want to only include trees that are used for calculating the RMSE values in table 4.
+
+```{r}
+# importing dataset containing predictions with relative truths and truths which are all whorls
+
+dat_comp_all = readRDS("S:\\Users\\maria\\PHD\\Paper_3\\output\\prediction_results.rds")
+```
+
+```{r}
+
+# Make the variable plotID and select only plotIDs that were used to
+data_frames_extr5 = data_frames_extr %>% 
+  full_join(data_frames_extr4, by = "treeID") %>% 
+  filter(treeID %in% dat_comp_all$treeID) %>% # Only treeIDs used to calculate RMSE and MD
+  select(-c("start", "end")) %>% 
+  distinct() %>% 
+  mutate(treeID2 = as.numeric(factor(treeID))) # make new treeID numbers which are like 1, 2, 3, 4, 5, 6, 7 etc.. 
+
+ggplot(data_frames_extr5) +
+  geom_point(aes(x = treeID2, y = value, col = type), alpha = 0.7) +
+  geom_segment(aes(x = treeID2, xend = treeID2, y = min_value, yend = max_value), color = "black", na.rm = TRUE, alpha = 0.7) +
+  theme_bw() +
+  scale_color_manual(values = c("All whorls" = "black", "Maximum SI" = "#0072B2", "Minimum SI" = "#D55E00")) +
+  theme(axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12), # Customize y-axis text
+    legend.title = element_blank(), # Customize legend title
+    legend.text = element_text(size = 14), # Customize legend text
+    strip.text = element_text(size = 14)) +
+  ylim(0, 35) +
+  labs(x = "Tree number", y = "Site index (m)", title = "")
+
+ggsave(paste0("S:\\Users\\maria\\PHD\\Paper_3\\fig\\fig6.tif"), device = "tiff", width = 10, height = 6, units = "in", dpi = 500)
+```
+
+Find min, mean, and max difference between values.
+
+```{r}
+data_frames_extr6 = data_frames_extr5 %>% 
+  mutate(range = max_value - min_value)
+
+min(data_frames_extr6$range)
+mean(data_frames_extr6$range)
+max(data_frames_extr6$range)
+```

@@ -1,0 +1,571 @@
+---
+3---
+title: "Selection_of_intercepts_based_on_confidence_scores"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(data.table)
+library(gt)
+library(ggpubr)
+
+source("S:\\Users\\maria\\functions\\rmse_and_md_func.R")
+source("S:\\Users\\maria\\functions\\SiteIndex.func_modifyed4.R")
+```
+
+# Import data
+
+Predicted data
+
+```{r}
+# manually_segmented_val = readRDS("S:\\Users\\maria\\Paper_3\\data\\manually_segmented_valtree.rds")
+
+p_dat = read.csv("S:\\Users\\maria\\PHD\\Paper_3\\data\\results_prediction\\all_test_trees_treeID_whorls_pc_HKL2model_24cmthresh.csv") %>% 
+  # filter(!(treeID %in% manually_segmented_val)) %>% # I choose to include the manually segmented trees 
+  group_by(treeID) %>% 
+  filter(z > 2.5 & z <= 8.00) %>% 
+  mutate(Kvistkrans = row_number()) %>% 
+  ungroup() %>% 
+  filter(!(treeID %in% 24494082)) %>%  # This treeID does not exist in the fielddata... The reason for this is that there is a negative difference in height between consequitive branch whorls so the plot was omitted in the code 1_DW_fielddata_and_saving_tree_positions. 
+  rename(prob = confidence_p2) %>% 
+  as.data.table()
+```
+
+```{r}
+field_dat = readRDS("S:\\Users\\maria\\PHD\\Paper_3\\data\\fielddata\\fielddata.rds") %>% 
+  select(-c("Trenr", "Avstand", "Retning", "Comment_1", "Comment_2")) %>% 
+  mutate(treeID = str_replace(plot_and_tree, "_", "")) %>% 
+  mutate(treeID = as.numeric(treeID)) %>% 
+  group_by(treeID) %>% 
+  filter(Lengde_m > 2.5 & Lengde_m <= 8) %>% 
+  mutate(Kvistkrans = row_number()) %>% # Renumber the Kvistkrans after selecting only Kvistkranses over 2.5 meters 
+  ungroup() %>% 
+  as.data.table()  
+```
+
+# Optimizing for probability
+
+```{r}
+p_dat_opt = p_dat # make a copy of the predicted data that you can use for the optimization 
+f_dat_opt = field_dat
+```
+
+I want to find the best sequence optimized in terms of the largest average of confidence scores.
+
+Find the contiguous sequence with the maximum average of confidence scores. Calculate the intercept start, intercept end, and number of whorls for this sequence.
+
+```{r}
+
+treeplotnames = unique(p_dat_opt$treeID) # unique trees 
+
+# Make a function that finds the best sequence (best_sequence) given a minimum sequence length (min_sequence_length)
+
+# Loop over all possible starting points for the sequence
+
+best_seq = function(data = p_dat1, min_sequence_length = min_sequence_length) {
+  
+      # Initialize variables
+      max_avg <- 0
+      best_sequence <- NULL
+  
+      for (start in 1:(nrow(data) - min_sequence_length + 1)) {
+      # Loop over all possible ending points for the sequence
+        for (end in (start + min_sequence_length - 1):nrow(data)) {
+        # Calculate avg of confidence scores for the current sequence
+        current_avg <- mean(data$prob[start:end])
+    
+    # print(paste(current_avg, start, end, end-start+1)) # just checking that it is     working. 
+    
+        # If the current avg is greater than the maximum avg found so far, update the maximum avg and best sequence
+        if (current_avg > max_avg) {
+        max_avg <- current_avg
+        best_sequence <- data$branch_whorl[start:end]
+          }
+        }
+      }
+  
+  return(list(best_sequence, max_avg))
+  
+}
+
+
+```
+
+```{r}
+
+i = 50
+
+p_dat_opt$SI_pred = as.numeric(NA)
+f_dat_opt$SI_ref = as.numeric(NA)
+
+difference_end_pred_end_field = c() # In this vector I fill in differences between the predicted and field reference end of the intercept. If there are vast differences in predictedand field reference whorls, then there is a possibility that the closest value in the field data will be very far of. So, therefore I want to have a vector where I can check this. 
+
+for(i in 1:length(treeplotnames)) {
+
+  p_dat1 = p_dat_opt[treeID == treeplotnames[i]]
+  f_dat1 = f_dat_opt[treeID == treeplotnames[i]]
+  
+  p_dat1 = p_dat1 %>% 
+  arrange(z) %>% 
+  mutate(branch_whorl = 1:n())
+  
+  min_sequence_length = 3 # the minimum sequence length is 3
+  min_sequence_length_full = 6 # the minimum sequence length for when only one intercept is needed is 6
+
+    if(max(p_dat1$branch_whorl) >= min_sequence_length_full) { # need to have at least these many branch whorls to get a SI value, as two intercepts is necessary if min_sequence_length is to be used and 3*2 is 6. 
+
+      # Find best sequence given the minimum sequence length
+      best_sequence = best_seq(data = p_dat1, min_sequence_length = min_sequence_length)[[1]]
+      max_avg = best_seq(data = p_dat1, min_sequence_length = min_sequence_length)[[2]]
+      
+      # Find best sequence given the sequence length where only one intercept is needed
+      best_sequence_full = best_seq(data = p_dat1, min_sequence_length = min_sequence_length_full)[[1]]
+      max_avg_full = best_seq(data = p_dat1, min_sequence_length = min_sequence_length_full)[[2]]
+      
+      if (length(best_sequence) < 6 & max(p_dat1$branch_whorl) >= (length(best_sequence) + min_sequence_length)) { # If the best_sequence has fewer than six whorls, then we will need another intercept. Checking that we have enough branch whorls to calculate this other intercept. 
+        
+        p_dat2 = p_dat1 %>% 
+          slice(-best_sequence) %>% # take out the branch whorls which you have just "used up"
+          arrange(z)
+  
+          if(nrow(p_dat2) > 0) {
+            p_dat2 = p_dat2 %>% 
+            mutate(branch_whorl = 1:n())
+          }
+        
+        best_sequence = list(best_sequence, best_seq(data = p_dat2, min_sequence_length = min_sequence_length)[[1]])
+        max_avg = c(max_avg, best_seq(data = p_dat2, min_sequence_length = min_sequence_length)[[2]])
+        
+      }
+      
+      if(length(best_sequence) > 1 & length(max_avg) > 1) {
+        
+        if (mean(max_avg) > mean(max_avg_full)) { # Now, when we have to use the mean of two intercepts it is a possibility that this no longer gives better results than the intercept with at least six whorls. Checking that the mean of the shorter intercept is better than the mean of the intercept with at least six whorls. 
+          
+          intercept_start = c(p_dat1$z[unlist(best_sequence[[1]])[1]], p_dat2$z[unlist(best_sequence[[2]])[1]])
+            
+          intercept_end = c(p_dat1$z[unlist(best_sequence[[1]])[length(best_sequence[[1]])]], p_dat2$z[unlist(best_sequence[[2]])[length(best_sequence[[2]])]])
+            
+          num_whorls = c(length(best_sequence[[1]]), length(best_sequence[[2]]))  
+          
+        } else {
+          
+          intercept_start = p_dat1$z[best_sequence_full[1]]
+            
+          intercept_end = p_dat1$z[best_sequence_full[length(best_sequence_full)]]
+            
+          num_whorls = length(best_sequence_full)  
+          
+        }
+        
+      } else {
+        
+        intercept_start = p_dat1$z[best_sequence_full[1]]
+            
+        intercept_end = p_dat1$z[best_sequence_full[length(best_sequence_full)]]
+            
+        num_whorls = length(best_sequence_full)   
+        
+      }
+      
+    } else {
+      
+      intercept_start = NULL # I set these to NULL so that their length will be 0 and they will not be used to calculate any predicted SI_values in the code bellow. 
+      intercept_end = NULL
+      num_whorls = NULL
+    }
+  
+    if(length(intercept_start) > 1 & length(intercept_end) > 1 & length(num_whorls) > 1) {
+      
+      p_dat_opt[treeID == treeplotnames[i]]$SI_pred = weighted.mean(c(calc_SI_MultiTemp(hts = c(intercept_start[1], intercept_end[1]), yrs = c((2024-num_whorls[1] + 1), 2024), SP = 1)[[1]], calc_SI_MultiTemp(hts = c(intercept_start[2], intercept_end[2]), yrs = c((2024-num_whorls[2] + 1), 2024), SP = 1)[[1]]), c(num_whorls[1], num_whorls[2]))
+      
+      # Getting information necessary to calculate height differential SI from the field data with the same intercept
+      f_intercept_start = c()
+      f_intercept_start[1] = f_dat1$Lengde_m[which.min(abs(f_dat1$Lengde_m - intercept_start[1]))]
+      f_intercept_start[2] = f_dat1$Lengde_m[which.min(abs(f_dat1$Lengde_m - intercept_start[2]))]
+      
+      f_intercept_end = c()
+      f_intercept_end[1] = f_dat1$Lengde_m[which.min(abs(f_dat1$Lengde_m - intercept_end[1]))]
+      f_intercept_end[2] = f_dat1$Lengde_m[which.min(abs(f_dat1$Lengde_m - intercept_end[2]))]
+      
+      difference_end_pred_end_field[i] = c(difference_end_pred_end_field[i], intercept_end - f_intercept_end)
+      
+      f_num_whorls = c(length(which.min(abs(f_dat1$Lengde_m - intercept_start[1])):which.min(abs(f_dat1$Lengde_m - intercept_end[1]))), length(which.min(abs(f_dat1$Lengde_m - intercept_start[2])):which.min(abs(f_dat1$Lengde_m - intercept_end[2]))))
+
+      
+      # Height differential SI from field data
+      if(all(!is.na(f_intercept_start)) & all(!is.na(f_intercept_end)) & all(f_intercept_end - f_intercept_start != 0)) {
+      f_dat_opt[treeID == treeplotnames[i]]$SI_ref = weighted.mean(c(calc_SI_MultiTemp(hts = c(f_intercept_start[1], f_intercept_end[1]), yrs = c((2024-f_num_whorls[1] + 1), 2024), SP = 1)[[1]], calc_SI_MultiTemp(hts = c(f_intercept_start[2], f_intercept_end[2]), yrs = c((2024-f_num_whorls[2] + 1), 2024), SP = 1)[[1]]), c(f_num_whorls[1], f_num_whorls[2]))
+      }
+      
+    } else if (length(intercept_start) == 1 & length(intercept_end) == 1 & length(num_whorls) == 1) {
+      
+      p_dat_opt[treeID == treeplotnames[i]]$SI_pred = calc_SI_MultiTemp(hts = c(intercept_start, intercept_end), yrs = c((2024-num_whorls + 1), 2024), SP = 1)[[1]]
+      
+      # Getting information necessary to calculate height differential SI from the field data with the same intercept
+      f_intercept_start = f_dat1$Lengde_m[which.min(abs(f_dat1$Lengde_m - intercept_start))]
+      f_intercept_end = f_dat1$Lengde_m[which.min(abs(f_dat1$Lengde_m - intercept_end))]
+      f_num_whorls = length(which.min(abs(f_dat1$Lengde_m - intercept_start)):which.min(abs(f_dat1$Lengde_m - intercept_end)))
+      
+      difference_end_pred_end_field[i] = intercept_end - f_intercept_end # Fill in this vector where I can check later that the difference between the field measured and predicted intercept end is not way to big.  
+      
+      # Height differential SI from the field data
+      if(all(!is.na(f_intercept_start)) & all(!is.na(f_intercept_end)) & all(f_intercept_end - f_intercept_start != 0)) { 
+      f_dat_opt[treeID == treeplotnames[i]]$SI_ref = calc_SI_MultiTemp(hts = c(f_intercept_start, f_intercept_end), yrs = c((2024-f_num_whorls + 1), 2024), SP = 1)[[1]]
+      }
+      
+      
+    }
+  
+}
+
+max(difference_end_pred_end_field, na.rm = T) 
+min(difference_end_pred_end_field, na.rm = T)
+# I don't consider these to be very big differences. I think we can say that it will be more or less the same intercept. 
+```
+
+Add the plotID
+
+```{r}
+p_dat_opt = p_dat_opt %>% mutate(plotID = as.numeric(substr(as.character(treeID), 1, nchar(as.character(treeID)) - 1)))
+f_dat_opt = f_dat_opt %>% mutate(plotID = as.numeric(substr(as.character(treeID), 1, nchar(as.character(treeID)) - 1)))
+```
+
+```{r}
+p_dat_opt = p_dat_opt %>%
+  select(c("treeID", "plotID", "SI_pred")) %>% 
+  distinct() %>%
+  mutate(Type = "Optimization") %>% 
+  rename(SI = SI_pred)
+
+f_dat_opt = f_dat_opt %>% 
+  select(c("treeID", "plotID", "SI_ref")) %>% 
+  distinct() %>%
+  mutate(Type = "Field_measured_optimization") %>% 
+  rename(SI = SI_ref)
+```
+
+# Not optimizing for probability
+
+Just using all branch whorls from 2.5 to 8 meters (All_whorls) or using a fixed intercept, which is the intercept by hC\$gglund.
+
+```{r}
+# predicted data 
+p_dat_nopt = p_dat %>% 
+  group_by(treeID) %>% 
+  mutate(`SI_pred_All_whorls` = calc_SI_MultiTemp(hts = c(z[which.min(Kvistkrans)], z[which.max(Kvistkrans)]), yrs = c((2024-max(Kvistkrans)+ 1), 2024), SP = 1)[[1]], 
+         `SI_pred_First_six_whorls` = calc_SI_MultiTemp(hts = c(z[which.min(Kvistkrans)], z[which(Kvistkrans == 6)]), yrs = c((2024-6 + 1), 2024), SP = 1)[[1]]) %>% 
+  ungroup() %>% 
+  mutate(plotID = as.numeric(substr(as.character(treeID), 1, nchar(as.character(treeID)) - 1))  ) %>% 
+  pivot_longer(starts_with("SI"), names_to = "Type", names_pattern = "SI_pred_(All_whorls|First_six_whorls)", values_to = "SI") %>% 
+  select(c("treeID", "plotID", "SI", "Type")) %>% 
+  distinct() 
+
+# Fieldmeasured data 
+field_dat_nopt = field_dat %>% 
+  group_by(treeID) %>% 
+  mutate(`SI_All whorls` = calc_SI_MultiTemp(hts = c(Lengde_m[which.min(Kvistkrans)], Lengde_m[which.max(Kvistkrans)]), yrs = c((2024-max(Kvistkrans)+ 1), 2024), SP = 1)[[1]], 
+         `SI_First six whorls` = calc_SI_MultiTemp(hts = c(Lengde_m[which.min(Kvistkrans)], Lengde_m[which(Kvistkrans == 6)]), yrs = c((2024-6+ 1), 2024), SP = 1)[[1]]) %>% 
+  ungroup() %>% 
+  mutate(plotID = as.numeric(plotnr)) %>% 
+  pivot_longer(starts_with("SI"), names_to = "Type", names_pattern = "SI_(All whorls|First six whorls)", values_to = "SI") %>% 
+  select(c("treeID", "plotID", "SI", "Type")) %>% 
+  distinct() %>% 
+  mutate(Type = case_when(
+    Type == "All whorls" ~ "Field_measured_all_whorls", 
+    Type == "First six whorls" ~ "Field_measured_first_six_whorls"
+  ))
+
+```
+
+```{r}
+
+dat_all = full_join(p_dat_nopt, field_dat_nopt, by = c("treeID", "plotID", "SI", "Type")) %>% 
+  full_join(p_dat_opt, by = c("treeID", "plotID", "SI", "Type")) %>% 
+  full_join(f_dat_opt, by = c("treeID", "plotID", "SI", "Type")) %>% 
+  pivot_wider(names_from = "Type", values_from = "SI") %>% 
+  filter(!(treeID %in% c("24494101", "24508071", "25016031"))) %>% # removing these treeIDs because I have seen that there are negative predictions which are likely due to the segmentation of the point cloud. 
+  na.omit()  
+
+# saveRDS(dat_all, "S:\\Users\\maria\\Paper_3\\output\\prediction_results.rds")
+```
+
+## RMSE and MD
+
+At the plot level.
+
+I will import a dataset of the results from the relative truths because I want to make sure that the plots I use to calculate the RMSE are exactly the same in relative truths as here.
+
+```{r}
+# RMSE 
+dat_all = dat_all %>% 
+  group_by(plotID) %>% 
+  mutate(All_whorls = mean(All_whorls, na.rm = T), # I use na.rm = T because if there is NA for one tree, I still want to be able to use the other tree to calculate the SI for that plot. 
+         First_six_whorls = mean(First_six_whorls, na.rm = T), 
+         Optimization = mean(Optimization, na.rm = T), 
+         Field_measured_all_whorls = mean(Field_measured_all_whorls, na.rm = T), 
+         Field_measured_first_six_whorls = mean(Field_measured_first_six_whorls, na.rm = T), 
+         Field_measured_optimization = mean(Field_measured_optimization, na.rm = T)) %>% 
+  ungroup() %>% 
+  select(c("plotID", "All_whorls", "First_six_whorls", "Optimization", "Field_measured_all_whorls", "Field_measured_first_six_whorls", "Field_measured_optimization")) %>% 
+  distinct() 
+
+# get the number of observations used to find the RMSE and MD
+nrow(dat_all)
+
+# saveRDS(dat_all, "S:\\Users\\maria\\Paper_3\\output\\prediction_results_plot_level.rds") # predictions at the plot level
+
+```
+
+A table of the RMSE and MD
+
+```{r}
+  
+RMSE_MD_plot = dat_all %>% 
+  mutate(RMSE_All_whorls = rmse_func(All_whorls, Field_measured_all_whorls), 
+         MD_All_whorls = md_func(All_whorls, Field_measured_all_whorls), 
+         
+         RMSE_First_six_whorls = rmse_func(First_six_whorls, Field_measured_all_whorls), 
+         MD_First_six_whorls = md_func(First_six_whorls, Field_measured_all_whorls),
+         RMSE_First_six_whorls_same_int = rmse_func(First_six_whorls, Field_measured_first_six_whorls), 
+         MD_First_six_whorls_same_int = md_func(First_six_whorls, Field_measured_first_six_whorls),
+         
+         RMSE_Optimization = rmse_func(Optimization, Field_measured_all_whorls), 
+         MD_Optimization = md_func(Optimization, Field_measured_all_whorls), 
+         RMSE_Optimization_same_int = rmse_func(Optimization, Field_measured_optimization), 
+         MD_Optimization_same_int = md_func(Optimization, Field_measured_optimization)) %>% 
+  
+  mutate(RMSE_perc_All_whorls = (RMSE_All_whorls / mean(Field_measured_all_whorls))*100, 
+         MD_perc_All_whorls = (MD_All_whorls / mean(Field_measured_all_whorls))*100, 
+         RMSE_perc_First_six_whorls = (RMSE_First_six_whorls / mean(Field_measured_all_whorls))*100, 
+         MD_perc_First_six_whorls = (MD_First_six_whorls / mean(Field_measured_all_whorls))*100,
+         RMSE_perc_First_six_whorls_same_int = (RMSE_First_six_whorls / mean(Field_measured_first_six_whorls))*100, 
+         MD_perc_First_six_whorls_same_int = (MD_First_six_whorls / mean(Field_measured_first_six_whorls))*100,
+         
+         RMSE_perc_Optimization = (RMSE_Optimization / mean(Field_measured_all_whorls))*100, 
+         MD_perc_Optimization = (MD_Optimization / mean(Field_measured_all_whorls))*100, 
+         RMSE_perc_Optimization_same_int = (RMSE_Optimization / mean(Field_measured_optimization))*100, 
+         MD_perc_Optimization_same_int = (MD_Optimization / mean(Field_measured_optimization))*100) %>% 
+  select(starts_with("RMSE"), starts_with("MD")) %>% 
+  distinct()
+
+# RMSE and MD in meters
+RMSE_MD_plot1 = RMSE_MD_plot %>% 
+  pivot_longer(
+  cols = c("RMSE_All_whorls", "RMSE_First_six_whorls", "RMSE_First_six_whorls_same_int", "RMSE_Optimization", "RMSE_Optimization_same_int",
+           "MD_All_whorls", "MD_First_six_whorls", "MD_First_six_whorls_same_int", "MD_Optimization", "MD_Optimization_same_int"), 
+  names_to = c("Metric", "Type"), # Create new columns from the names
+  names_pattern = "(RMSE|MD)_(.*)") %>% 
+  select(-c(starts_with("RMSE"), starts_with("MD"))) %>% 
+  pivot_wider(names_from = "Metric", values_from = "value")
+
+# RMSE and MD in percentage
+RMSE_MD_plot2 = RMSE_MD_plot %>% 
+  pivot_longer(
+  cols = c("RMSE_perc_All_whorls", "RMSE_perc_First_six_whorls", "RMSE_perc_First_six_whorls_same_int", "RMSE_perc_Optimization", "RMSE_perc_Optimization_same_int",
+           "MD_perc_All_whorls", "MD_perc_First_six_whorls", "MD_perc_First_six_whorls_same_int", "MD_perc_Optimization", "MD_perc_Optimization_same_int"), 
+  names_to = c("Metric", "Type"), # Create new columns from the names
+  names_pattern = "(RMSE|MD)_(.*)") %>% 
+  select(-c(starts_with("RMSE"), starts_with("MD"))) %>% 
+  pivot_wider(names_from = "Metric", values_from = "value") %>% 
+  mutate(Type = str_replace(Type, "perc_", "")) %>% 
+  rename(RMSE_perc = RMSE, 
+         MD_perc = MD)
+
+# Combine the two dataframes
+RMSE_MD_plot = full_join(RMSE_MD_plot1, RMSE_MD_plot2, by = "Type")
+
+RMSE_MD_plot
+
+RMSE_MD_plot = RMSE_MD_plot %>% 
+  filter(!grepl("six_whorls$", Type)) %>% # Only keep those that have used the same intercept
+  filter(!grepl("Optimization$", Type))
+```
+
+Make the table nice.
+
+```{r}
+
+RMSE_MD_plot_nice = RMSE_MD_plot %>% 
+  mutate(Type = case_when(
+    Type == "All_whorls" ~ "All whorls", 
+    Type == "First_six_whorls_same_int" ~ "First six whorls", 
+    Type == "Optimization_same_int" ~ "Selected whorls"
+  ), 
+  RMSE = round(RMSE, 1), 
+  MD = round(MD, 1), 
+  RMSE_perc = round(RMSE_perc, 1), 
+  MD_perc = round(MD_perc, 1)) %>% 
+  rename(Intercept = Type, 
+         "RMSE (m)" = RMSE, 
+         "MD (m)" = MD, 
+         "RMSE (%)" = RMSE_perc, 
+         "MD (%)" = MD_perc) %>% 
+  relocate(c("Intercept", "RMSE (m)", "RMSE (%)", "MD (m)", "MD (%)"))
+```
+
+```{r}
+RMSE_MD_gt = gt(RMSE_MD_plot_nice) 
+
+RMSE_MD_gt
+
+# if(file.exists("S:\\Users\\maria\\Paper_3\\output\\tables\\SI_metrics.docx")) {
+#  # Remove the file
+#  file.remove("S:\\Users\\maria\\Paper_3\\output\\tables\\SI_metrics.docx")
+# }
+
+# gtsave(RMSE_MD_gt, "S:\\Users\\maria\\Paper_3\\output\\tables\\SI_metrics.docx") 
+```
+
+# Plot of SI errors on plot level
+
+In this plot, I will include both the results using the all whorls as the true SI and the results using the relative truths as the site index.
+
+```{r}
+
+dat_SIres_plot = dat_all %>% 
+  pivot_longer(cols = c(All_whorls, First_six_whorls, Optimization), values_to = "SI_pred", names_to = "Type") %>% 
+  pivot_longer(cols = c(Field_measured_all_whorls, Field_measured_first_six_whorls, Field_measured_optimization), values_to = "SI_ref", names_to = "Type2") %>% 
+  filter(!(Type == "All_whorls" & Type2 == "Field_measured_first_six_whorls")) %>%
+  filter(!(Type == "All_whorls" & Type2 == "Field_measured_optimization")) %>% 
+  filter(!(Type == "First_six_whorls" & Type2 == "Field_measured_optimization")) %>% 
+  filter(!(Type == "Optimization" & Type2 == "Field_measured_first_six_whorls")) %>% 
+  filter(!(Type == "First_six_whorls" & Type2 == "Field_measured_all_whorls")) %>% 
+  filter(!(Type == "Optimization" & Type2 == "Field_measured_all_whorls")) %>% 
+  select(-c("Type2")) %>% 
+  mutate(Type = case_when(
+    Type == "All_whorls" ~ "All whorls", 
+    Type == "First_six_whorls" ~ "Lowest whorls",
+    Type == "Optimization" ~ "Selected whorls"
+  ), 
+  difference = SI_pred - SI_ref)
+
+# saveRDS(dat_SIres_plot, "S:\\Users\\maria\\kappa\\data\\dat_SIres_plot.rds") # Saving this data.frame for when I want to make a similar figure for the kappa. 
+
+
+# scatterplot
+
+dat_SIres_plot %>% 
+  group_by(Type) %>% 
+  summarise(correlation = cor(SI_pred, SI_ref)) # so that I can compare this correlation to the one calculated below. 
+
+
+dat_SIres_plot %>% 
+  ggplot(aes(x = SI_ref, y = SI_pred)) +
+  facet_wrap(vars(Type), dir = "v") +
+  geom_point(alpha = 0.6, size = 2) +
+  geom_abline(slope = 1, intercept = 0, col = "grey", linetype = "dashed", linewidth = 1) +  # Add perfect prediction line
+  # scale_color_manual(values = c("All whorls" = "black", "Lowest whorls" = "#0072B2", "Selected whorls" = "#D55E00")) +
+  # scale_fill_manual(values = color_palette) +
+  stat_cor(
+    method = "pearson",       # specify correlation method
+    aes(label = after_stat(gsub("R", "r", r.label))),            # only show the r-value label
+    hjust = 0.9,
+    vjust = 1,
+    geom = "label", 
+    fill = "white",
+    label.x.npc = "right",    # position at right
+    label.y.npc = "top",   # position at bottom
+    size = 5,
+    label.padding = unit(0.2, "lines"), # tweak the box padding
+    parse=FALSE
+    ) +
+  theme_bw() +
+  ylab("Predicted SI (m)") +
+  xlab("Reference SI (m)") +
+  ylim(14, 33) +
+  xlim(14, 33) +
+  theme(
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14), # Customize y-axis text
+    legend.title = element_blank(), # Customize legend title
+    legend.text = element_blank(), # Customize legend text
+    strip.text = element_text(size = 16)
+  ) -> sctrplt1
+
+
+dat_SIres_plot1 = dat_SIres_plot %>% 
+  mutate(abs_difference = abs(SI_pred - SI_ref)) %>% 
+  group_by(Type) %>% 
+  mutate(p_value = round(t.test(SI_pred, SI_ref, paired = T, alternative = "two.sided")[["p.value"]], 2)) %>% 
+  ungroup()
+
+
+sort(dat_SIres_plot1$abs_difference)
+dat_SIres_plot1$plotID[order(dat_SIres_plot1$abs_difference)]
+dat_SIres_plot1$plotID[which.min(dat_SIres_plot1$abs_difference)]
+
+
+# Add the p_value 
+p_tab = dat_SIres_plot1 %>% 
+  select(c("plotID", "Type", "p_value")) %>%
+  group_by(Type) %>%
+  summarize(
+    p_value = unique(p_value),         # assuming one p-value per Type
+    p_label = paste0("p = ", round(p_value, 2)),       # build the string
+    x_pos   = 33,  # place at right edge
+    y_pos   = 10  # place at bottom
+  )
+
+dat_SIres_plot1 = dat_SIres_plot1 %>% 
+  select(c("plotID", "Type", "p_value"))
+
+dat_SIres_plot2 = dat_SIres_plot %>% 
+  full_join(dat_SIres_plot1, by = c("plotID", "Type"))
+
+# plot of difference in SI over reference SI 
+
+dat_SIres_plot2 %>% 
+  ggplot(aes(x = SI_ref, y = difference)) +
+  facet_wrap(vars(Type), dir = "v") +
+  geom_point(alpha = 0.6, size = 2) + 
+  geom_abline(slope = 0, intercept = 0, col = "grey", linetype = "dashed", linewidth = 1) +
+  geom_label(
+    data       = p_tab,               # use the summary table
+    aes(x       = x_pos,
+        y       = y_pos,
+        label   = p_label),
+    hjust      = 0.9,                 # nudge left from right edge
+    vjust      = -0.7,                # nudge up from bottom edge
+    size       = 5, 
+    fill = "white", 
+    label.padding = unit(0.2, "lines"),   # box padding
+    label.size    = 0.3                   # border thickness
+  ) +
+  theme_bw() +
+  # scale_color_manual(values = c("All whorls" = "black", "Lowest whorls" = "#0072B2", "Selected whorls" = "#D55E00")) +
+  ylab("Predicted - reference SI (m)") +
+  xlab("Reference SI (m)") +
+  ylim(-15, 15) +
+  xlim(14, 33) +
+  theme(
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14), # Customize y-axis text
+    legend.title = element_blank(), # Customize legend title
+    legend.text = element_text(size = 16), # Customize legend text
+    strip.text = element_text(size = 16)
+  ) -> sctrplt2
+
+fig_sctrplts = cowplot::plot_grid(sctrplt1, sctrplt2)
+
+ggsave(plot = fig_sctrplts, paste0("S:\\Users\\maria\\PHD\\Paper_3\\fig\\reviewed_figures\\fig4.tif"), device = "tiff", width = 10, height = 10, units = "in", dpi = 500)
+
+fig_sctrplts
+```
+
+Make a boxplot.
+
+```{r}
+par(mfrow = c(1, 2))
+
+boxplot(dat_SIres_plot$SI_ref, main = "reference", ylim = c(14, 35))
+boxplot(dat_SIres_plot$SI_pred, main = "predicted", 
+        ylim = c(14, 35))
+```

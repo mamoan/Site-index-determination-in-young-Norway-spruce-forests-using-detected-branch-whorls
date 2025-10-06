@@ -1,0 +1,249 @@
+---
+title: "3.1_performance"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(terra)
+library(grid)
+library(lidR)
+library(gt)
+
+set.seed(234)
+
+source("S:\\Users\\maria\\PHD\\Paper_3\\code_github/0_functions_used_in_this_paper.R")
+source("S:/Users/maria/functions/rmse_and_md_func.R")
+```
+
+# 1. Importing field and predicted data
+
+```{r}
+start_of_section = 1.30
+end_of_section = 8.00 
+
+p_dat = read.csv("S:\\Users\\maria\\PHD\\Paper_3\\data\\results_prediction\\all_test_trees_treeID_whorls_pc_HKL2model_24cmthresh.csv") %>%
+  select(c("z", "treeID")) %>%
+  mutate(treeID = as.character(treeID)) %>%
+  filter(z >= start_of_section & z <= end_of_section) %>% 
+  arrange(treeID) %>% 
+  as.data.table() %>% 
+  filter(!(treeID %in% c("24494101", "24508071", "25016031"))) # removing these treeIDs because I have seen that there are negative predictions which are likely due to the segmentation of the point cloud. 
+```
+
+```{r}
+f_dat = readRDS("S:\\Users\\maria\\PHD\\Paper_3\\data\\fielddata\\fielddata.rds") %>% 
+  rename(treeID = plot_and_tree) %>% 
+  mutate(treeID = str_replace(treeID, "_", "")) %>% 
+  filter(treeID %in% p_dat$treeID & Lengde_m >= start_of_section & Lengde_m <= end_of_section) %>% 
+  select(c("standnr", "plotnr", "treeID", "Kvistkrans", "Lengde_m")) %>% 
+  rename(plotID = plotnr, 
+         standID = standnr) %>% 
+  select(-c("standID", "plotID")) %>% 
+  filter(Lengde_m >= start_of_section & Lengde_m <= end_of_section) %>% 
+  arrange(treeID) %>% 
+  as.data.table() 
+```
+
+```{r}
+p_dat = p_dat %>% 
+  filter(treeID %in% f_dat$treeID) # This is done because some of the trees used for validation is not in the field dataset. I think this is due to the test/val split being done on all fielddata files before I removed certain files due to there being errors in the field measurement. I still think it is best that I did the split before removing trees in the field dataset. Maybe I find out later that some of my judgements on which trees to remove were not the best ones, and then I will be happy not to have to do the split again. 
+
+f_dat = f_dat %>% 
+ filter(treeID %in% p_dat$treeID)
+
+length(unique(p_dat$treeID))
+length(unique(f_dat$treeID))
+```
+
+Split by plotID and treeID
+
+```{r}
+p_list1 = split(p_dat, p_dat$treeID)
+f_list1 = split(f_dat, f_dat$treeID)
+```
+
+# 2. Find the average whorl height from the val data
+
+```{r}
+val_trees = list.files("C:\\Users\\mamoan\\OneDrive - Norwegian University of Life Sciences\\PHD\\Paper_3_young_stands\\data\\val")
+val_trees = str_replace(val_trees, ".las|.laz", "")
+
+fifth_percentile = readRDS("S:\\Users\\maria\\PHD\\Paper_3\\data\\fielddata\\fielddata.rds") %>% 
+  mutate(plot_and_tree = str_replace(plot_and_tree, "_", "")) %>% 
+  filter(plot_and_tree %in% val_trees) %>% 
+  group_by(plot_and_tree) %>% 
+  mutate(minimum_int_distance = Lengde_m - lag(Lengde_m)) %>% 
+  ungroup() %>% 
+  select(c("minimum_int_distance")) %>% 
+  na.omit() %>%
+  as_vector() %>% 
+  sort()
+
+fifth_percentile = fifth_percentile[round(length(fifth_percentile)*0.05, 0)]
+
+average_whorl_height = readRDS("S:\\Users\\maria\\PHD\\Paper_3\\data\\fielddata\\fielddata.rds") %>% 
+  mutate(plot_and_tree = str_replace(plot_and_tree, "_", "")) %>% 
+  filter(plot_and_tree %in% val_trees) %>% 
+  group_by(plot_and_tree) %>% 
+  mutate(whorl_height_diff = Lengde_m - lag(Lengde_m)) %>% 
+  ungroup() %>% 
+  summarise(mean_hL = mean(whorl_height_diff, na.rm = T)) %>% 
+  as.numeric() -> average_whorl_height
+```
+
+# 2. Calculating ML metrics (precision, recall, and F-score)
+
+```{r}
+threshold = round(average_whorl_height/3, 2) 
+i = 5
+TP_FP_FN_dats = list()
+
+for(i in 1:length(p_list1)) {
+  
+  pred = p_list1[[i]]
+
+  ref = f_list1[[i]]
+  
+  if(identical(unique(p_list1[[i]]$treeID), unique(f_list1[[i]]$treeID))) {
+    
+  pred_mat = matrix(ncol = nrow(ref), nrow = nrow(pred))
+  
+  for(j in 1:nrow(ref)) {
+    pred_mat[,j] = abs(pred$z - ref[j, ]$Lengde_m)
+  }
+  
+  ####### Calculate TPs ############# 
+  
+  TP_FP_dat <- data.frame(treeID = pred$treeID, 
+                          TP = rep(NA, nrow(pred_mat)), 
+                          FP = rep(NA, nrow(pred_mat)), 
+                          height = rep(NA, nrow(pred_mat)), 
+                          min_dist = rep(NA, nrow(pred_mat)))
+  
+  k = 1
+  
+  TP = rep(0, nrow(pred_mat))
+  
+  predictions_under_threshold = list() # This will only be used to find out which predictions were not below the threshold for any TPs and will be used to calculate the false negatives
+  
+  # Iterate through each reference position (column)
+  for (k in 1:nrow(pred_mat)) {
+    min_dist <- min(pred_mat[k,]) # Find the reference whorl with the minimum distance 
+    predictions_under_threshold[[k]] <- which(pred_mat[k,] <= threshold) # Which column (i.e., reference whorls) are below the threshold for this prediction 
+    if (min_dist <= threshold) {
+      TP_FP_dat$TP[k] <- 1
+      TP_FP_dat$height[k] <- pred$z[k]
+      TP_FP_dat$min_dist[k] <- min_dist
+      
+    } else if (min_dist > threshold) {
+      TP_FP_dat$FP[k] <- 1
+      TP_FP_dat$height[k] <- pred$z[k]
+      TP_FP_dat$min_dist[k] <- min_dist 
+    }
+  } 
+  
+  predictions_under_threshold = unique(unlist(predictions_under_threshold))
+  
+  predictions_over_threshold = which(!(1:ncol(pred_mat) %in% unique(unlist(predictions_under_threshold))))
+   
+  if(length(predictions_under_threshold) < ncol(pred_mat)) { # only in the cases that some reference whorls were not used will I calculate false negatives..    
+    
+    FN_dat = data.frame(pos = predictions_over_threshold)
+    FN_dat$treeID = ref$treeID[FN_dat$pos]
+    FN_dat$FN = 1
+    FN_dat$height = ref$Lengde_m[FN_dat$pos] # This is field measured height while the height in TP_FP_dat is predicted height. It would have been better if I was able to use the same height for both, but I have not found a way to do this.. I can not think of any systematic effects that should occur from letting both predicted and reference height decide whether a FP or FN is in a particurlar section... 
+    
+    FN_dat = FN_dat %>% 
+      select(-c("pos")) # remove the pos column from the data.frame, because this column does not exist in TP_FP_dat
+
+  } else { # If all predictions are used, then there are no false positives, and I will set this to NA
+   FN_dat = data.frame(treeID = ref$treeID[1]) 
+   FN_dat$FN = NA
+   FN_dat$height = NA
+    
+  }
+  
+  TP_FP_FN_dat = full_join(TP_FP_dat, FN_dat, by = c("treeID", "height"))
+  
+  TP_FP_FN_dats[[i]] = TP_FP_FN_dat 
+
+  } else {
+    print("something is wrong")
+    print(i)
+  }
+
+}
+
+i
+
+TP_FP_FN_dats1 = bind_rows(TP_FP_FN_dats)
+TP_FP_FN_dats1 = TP_FP_FN_dats1[rowSums(is.na(TP_FP_FN_dats1)) != ncol(TP_FP_FN_dats1), ] # remove rows where all values are NA
+
+length(unique(TP_FP_FN_dats1$treeID)) # All trees are in this table 
+length(unique(p_dat$treeID))
+
+# Split into datasets in different sections
+
+# I split the data by height.. so the 1/3 of the lowest reference heights the 1/3 of the middle reference heights and the 1/3 of the highest reference heights are evaluated separately.. 
+
+the_split = round(start_of_section + ((end_of_section - start_of_section)/3), 1)
+the_split2 = round(start_of_section + (((end_of_section - start_of_section)/3)*2), 1)
+
+metrics_list = list(TP_FP_FN_dats1,
+    TP_FP_FN_dats1 %>% 
+    filter(height >= start_of_section & height < the_split), 
+    TP_FP_FN_dats1 %>% 
+    filter(height >= the_split & height < the_split2),
+    TP_FP_FN_dats1 %>% 
+    filter(height >= the_split2 & height <= end_of_section))
+
+
+# Calculate precision, recall, and F1 score
+
+precision = c()
+recall = c()
+
+i = 1
+
+
+for(i in 1:length(metrics_list)) {
+  precision[i] = (sum(metrics_list[[i]]$TP, na.rm = T) / (sum(metrics_list[[i]]$TP, na.rm = T) + sum(metrics_list[[i]]$FP, na.rm = T))) # precision calculation
+  recall[i] = (sum(metrics_list[[i]]$TP, na.rm = T) / (sum(metrics_list[[i]]$TP, na.rm = T) + sum(metrics_list[[i]]$FN, na.rm = T))) # recall calculation
+}
+
+
+F_score = as_vector(map2(precision, recall, ~ 2*(.x*.y)/(.x+.y)))
+
+# Calculating the number of observations.. 
+# I am guessing that the number of observations are the number of predicted whorls in each category.. To geth this number I take out the FNs and then count the number of rows in the dataframe since TP + FP = Total number of predicted whorls.
+map(metrics_list, ~ nrow(.x))
+metrics_list1 = map(metrics_list, ~ .x %>% filter(is.na(FN)))
+map(metrics_list1, ~ nrow(.x))
+
+n_obs = as_vector(map(metrics_list1, ~ nrow(.x)))
+```
+
+# 3. Make a table of the results
+
+```{r}
+
+metrics = data.frame(Section = c("Overall", paste0("1.3-", as.character(the_split), " m"), paste0(as.character(the_split), "-", as.character(the_split2), " m"), paste0(as.character(the_split2), "-", "8.00 m")), 
+                     n = n_obs,
+                     Precision = round(precision, 2), 
+                     Recall = round(recall, 2), 
+                     F1_score = round(F_score, 2))
+
+metrics_gt = gt(metrics) 
+
+metrics_gt
+
+if(file.exists("S:\\Users\\maria\\Paper_3\\output\\tables\\metrics.docx")) {
+  # Remove the file
+  file.remove("S:\\Users\\maria\\Paper_3\\output\\tables\\metrics.docx")
+}
+
+gtsave(metrics_gt, "S:\\Users\\maria\\Paper_3\\output\\tables\\metrics.docx")
+```

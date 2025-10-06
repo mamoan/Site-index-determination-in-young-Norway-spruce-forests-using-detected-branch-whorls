@@ -1,0 +1,97 @@
+---
+title: "3.3_Analyzing_possible_overprediction"
+format: html
+editor: visual
+---
+
+In this document I want to see whether the predictions by the optimization methods in 3.2 are systematically overpredicting the SI.
+
+I will look into this by seeing whether the field measured SI from the interval selected in the optimization is statistically significantly different from the field measured SI from all whorls above 2.5 m.
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(ggpubr)
+library(rstatix)
+```
+
+## Importing field data SI predictions
+
+Field data SI predictions
+
+```{r}
+optdat = readRDS("S:\\Users\\maria\\PHD\\Paper_3\\output\\prediction_results.rds") %>% 
+  select(c("treeID", "Field_measured_all_whorls", "Field_measured_optimization")) %>% 
+  as.data.table() %>% 
+  distinct() %>% 
+  mutate(difference = Field_measured_optimization - Field_measured_all_whorls)
+
+nrow(optdat) # 61 obs will be used in the test
+```
+
+Make some plots of assumptions
+
+```{r}
+# I need to check whether the distribution of differences is normally distributed
+qqplot = ggqqplot(optdat, "difference") # Yews, it looks good. Can assume normality of the data.
+qqplot
+hist(optdat$difference, main = "Histogram of differences within pairs", xlab = "Field measured SI using selected whorls - Field measured SI using all whorls") # Just doing a plot I understand better intuitively. yes, normally distributed 
+optdat %>% shapiro_test(difference) # The p-value is greater than 0.05 so it is normally distributed. 
+
+# save the QQPlot
+ggsave(plot = qqplot, paste0("S:\\Users\\maria\\PHD\\Paper_3\\fig\\S2.tif"), device = "tiff", width = 10, height = 6, units = "in", dpi = 500)
+```
+
+```{r}
+# No significant outliers in the difference between the two groups  
+bxplt = ggplot(optdat) +
+  geom_boxplot(aes(y = difference)) + 
+  ylab("Field measured SI using selected whorls - Field measured SI using all whorls (m)") +
+  theme_bw() +
+  xlim(-1, 1) +
+  theme(
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 11.5),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12), # Customize y-axis text
+    legend.title = element_blank(), # Customize legend title
+    legend.text = element_text(size = 14), # Customize legend text
+    strip.text = element_text(size = 14)
+  )
+
+bxplt # So, my question here is, what is a "significant" outlier. For me this looks like a typical distribution of data. I assume this assumptions is okey. I have this tutorial that seems to support that: https://www.statisticssolutions.com/free-resources/directory-of-statistical-analyses/paired-sample-t-test/.  
+
+optdat %>% 
+  identify_outliers(difference) # Still according to the function identify_outliers() these are outliers.. I will therefore try the test with and without the outliers to see if there is any difference. 
+
+ggsave(plot = bxplt, paste0("S:\\Users\\maria\\PHD\\Paper_3\\fig\\S3.tif"), device = "tiff", width = 10, height = 6, units = "in", dpi = 500)
+```
+
+```{r}
+# ?t.test
+```
+
+Make some correlation plots
+
+```{r}
+plot(optdat$Field_measured_all_whorls, optdat$Field_measured_optimization)
+```
+
+Do pairwise t-tests
+
+```{r}
+test_opt = t.test(optdat$Field_measured_optimization, optdat$Field_measured_all_whorls, paired = TRUE, alternative = "greater")
+
+test_opt
+```
+
+Do pairwise t-tests without the outliers
+
+```{r}
+optdat %>% 
+  filter(!(treeID %in% c(25257052, 30058044, 30137202))) -> optdat1
+
+test_opt1 = t.test(optdat1$Field_measured_optimization, optdat1$Field_measured_all_whorls, paired = TRUE, alternative = "greater")
+
+test_opt1 # It got less significant.. 
+```
